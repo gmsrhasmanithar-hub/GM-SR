@@ -17,14 +17,19 @@ import android.print.PrintDocumentAdapter
 import android.print.PrintDocumentInfo
 import android.print.PrintManager
 import androidx.core.content.FileProvider
+import com.example.model.AppCompanySettings
 import com.example.model.Committee
 import com.example.model.CommitteeMember
+import com.example.model.CommitteeStatus
+import com.example.model.CommitteeTurn
 import com.example.model.DashboardSummary
 import com.example.model.FormatUtils
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
+import com.example.model.OldCommitteeRecord
+import com.example.model.PaymentMethod
 import com.example.model.PayoutStatus
 import java.io.File
 import java.io.FileInputStream
@@ -34,15 +39,15 @@ import java.util.Date
 import java.util.Locale
 
 enum class PdfReportType {
-    MEMBER_LIST,
-    MONTHLY_PAYMENT,
-    PAID_MEMBERS_REPORT,
-    UNPAID_MEMBERS_REPORT,
-    PAID_UNPAID_LIST,
-    INDIVIDUAL_HISTORY,
-    COLLECTION_REPORT,
-    PAYOUT_REPORT,
-    COMPLETE_SUMMARY
+    INDIVIDUAL_MEMBER,
+    COMPLETE_MEMBER_LIST,
+    MONTHLY_COLLECTION,
+    PENDING_PAYMENTS,
+    COMPLETED_PAYMENTS,
+    INDIVIDUAL_COMMITTEE,
+    COMMITTEE_PAYOUT_REPORT,
+    PREVIOUS_COMMITTEE_HISTORY,
+    COMPLETE_FINANCIAL_SUMMARY
 }
 
 object PdfReportGenerator {
@@ -53,12 +58,16 @@ object PdfReportGenerator {
     fun generateReport(
         context: Context,
         reportType: PdfReportType,
-        committee: Committee,
-        members: List<CommitteeMember>,
-        installments: List<InstallmentRecord>,
-        selectedMonthKey: String,
-        selectedMember: CommitteeMember?,
-        summary: DashboardSummary
+        committee: Committee?,
+        allCommittees: List<Committee> = emptyList(),
+        members: List<CommitteeMember> = emptyList(),
+        installments: List<InstallmentRecord> = emptyList(),
+        turns: List<CommitteeTurn> = emptyList(),
+        oldRecords: List<OldCommitteeRecord> = emptyList(),
+        selectedMonthKey: String = MonthUtils.currentMonthKey(),
+        selectedMember: CommitteeMember? = null,
+        summary: DashboardSummary? = null,
+        companySettings: AppCompanySettings = AppCompanySettings()
     ): Result<File> {
         val doc = PdfDocument()
         return try {
@@ -67,19 +76,35 @@ object PdfReportGenerator {
             val fileName = "GM_HASMANI_${reportType.name}_$stamp.pdf"
             val outFile = File(dir, fileName)
 
-            val writer = PdfPageWriter(doc, committee.name)
+            val headerCommitteeLabel = when (reportType) {
+                PdfReportType.PREVIOUS_COMMITTEE_HISTORY -> "Historical Archive"
+                PdfReportType.COMPLETE_FINANCIAL_SUMMARY -> "All Committees"
+                else -> committee?.name ?: companySettings.companyName
+            }
+            val writer = PdfPageWriter(doc, headerCommitteeLabel, companySettings)
             writer.startNewPage(reportSubtitle(reportType, selectedMonthKey, selectedMember))
 
+            val cur = companySettings.currency
+
             when (reportType) {
-                PdfReportType.MEMBER_LIST -> writeMemberList(writer, committee, members)
-                PdfReportType.MONTHLY_PAYMENT -> writeMonthlyPaymentReport(writer, selectedMonthKey, installments)
-                PdfReportType.PAID_MEMBERS_REPORT -> writePaidMembersReport(writer, selectedMonthKey, installments)
-                PdfReportType.UNPAID_MEMBERS_REPORT -> writeUnpaidMembersReport(writer, selectedMonthKey, installments)
-                PdfReportType.PAID_UNPAID_LIST -> writePaidUnpaidReport(writer, selectedMonthKey, installments)
-                PdfReportType.INDIVIDUAL_HISTORY -> writeIndividualHistory(writer, selectedMember, installments)
-                PdfReportType.COLLECTION_REPORT -> writeCollectionReport(writer, committee, installments, summary)
-                PdfReportType.PAYOUT_REPORT -> writePayoutReport(writer, committee, members)
-                PdfReportType.COMPLETE_SUMMARY -> writeCompleteSummary(writer, committee, members, installments, summary)
+                PdfReportType.INDIVIDUAL_MEMBER ->
+                    writeIndividualMemberReport(writer, committee, selectedMember, installments, turns, cur)
+                PdfReportType.COMPLETE_MEMBER_LIST ->
+                    writeCompleteMemberList(writer, committee, members, cur)
+                PdfReportType.MONTHLY_COLLECTION ->
+                    writeMonthlyCollectionReport(writer, selectedMonthKey, installments, cur)
+                PdfReportType.PENDING_PAYMENTS ->
+                    writePendingPaymentsReport(writer, selectedMonthKey, installments, cur)
+                PdfReportType.COMPLETED_PAYMENTS ->
+                    writeCompletedPaymentsReport(writer, selectedMonthKey, installments, cur)
+                PdfReportType.INDIVIDUAL_COMMITTEE ->
+                    writeIndividualCommitteeReport(writer, committee, members, installments, turns, summary, cur)
+                PdfReportType.COMMITTEE_PAYOUT_REPORT ->
+                    writeCommitteePayoutReport(writer, committee, members, turns, cur)
+                PdfReportType.PREVIOUS_COMMITTEE_HISTORY ->
+                    writePreviousCommitteeHistory(writer, oldRecords)
+                PdfReportType.COMPLETE_FINANCIAL_SUMMARY ->
+                    writeCompleteFinancialSummary(writer, committee, allCommittees, members, installments, turns, oldRecords, summary, cur)
             }
 
             writer.finish()
@@ -108,7 +133,11 @@ object PdfReportGenerator {
             }
         }
         return try {
-            val chooser = if (shareMode) Intent.createChooser(intent, "Share GM HASMANI PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) else intent
+            val chooser = if (shareMode) {
+                Intent.createChooser(intent, "Share GM HASMANI PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            } else {
+                intent
+            }
             context.startActivity(chooser)
             true
         } catch (_: Exception) {
@@ -187,35 +216,108 @@ object PdfReportGenerator {
     }
 
     private fun reportSubtitle(type: PdfReportType, monthKey: String, member: CommitteeMember?): String = when (type) {
-        PdfReportType.MEMBER_LIST -> "Complete Member List"
-        PdfReportType.MONTHLY_PAYMENT -> "Monthly Collection Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
-        PdfReportType.PAID_MEMBERS_REPORT -> "Paid Members Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
-        PdfReportType.UNPAID_MEMBERS_REPORT -> "Unpaid Members Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
-        PdfReportType.PAID_UNPAID_LIST -> "Paid & Unpaid List • ${MonthUtils.formatMonthDisplay(monthKey)}"
-        PdfReportType.INDIVIDUAL_HISTORY -> "Member History • ${member?.name ?: "Member"}"
-        PdfReportType.COLLECTION_REPORT -> "Committee Collection Report"
-        PdfReportType.PAYOUT_REPORT -> "Payout History Report"
-        PdfReportType.COMPLETE_SUMMARY -> "Complete Financial Summary"
+        PdfReportType.INDIVIDUAL_MEMBER -> "Individual Member Report • ${member?.name ?: "Member"}"
+        PdfReportType.COMPLETE_MEMBER_LIST -> "Complete Member List"
+        PdfReportType.MONTHLY_COLLECTION -> "Monthly Collection Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
+        PdfReportType.PENDING_PAYMENTS -> "Pending Payments Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
+        PdfReportType.COMPLETED_PAYMENTS -> "Completed Payments Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
+        PdfReportType.INDIVIDUAL_COMMITTEE -> "Individual Committee Report"
+        PdfReportType.COMMITTEE_PAYOUT_REPORT -> "Committee Payout Turns Report"
+        PdfReportType.PREVIOUS_COMMITTEE_HISTORY -> "Previous Committee History"
+        PdfReportType.COMPLETE_FINANCIAL_SUMMARY -> "Complete Financial Summary"
     }
 
-    private fun writeMemberList(writer: PdfPageWriter, committee: Committee, members: List<CommitteeMember>) {
-        val activeMembers = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.sortedBy { it.committeeNumber }
-        val archivedMembers = members.filter { it.memberStatusEnum == MemberStatus.ARCHIVED }.sortedBy { it.committeeNumber }
+    private fun writeIndividualMemberReport(
+        writer: PdfPageWriter,
+        committee: Committee?,
+        member: CommitteeMember?,
+        installments: List<InstallmentRecord>,
+        turns: List<CommitteeTurn>,
+        cur: String
+    ) {
+        if (member == null || committee == null) {
+            writer.drawInfoBox(listOf("No member selected for report."))
+            return
+        }
+        val memberRows = installments.filter { it.memberId == member.id }.sortedBy { it.monthIndex }
+        val totalPaid = memberRows.sumOf { it.paidAmount }
+        val totalRemaining = memberRows.sumOf { it.remainingAmount }
+        val monthlyContribution = member.monthlyDue(committee.monthlyInstallment)
+        val memberTurns = turns.filter {
+            it.recipientMemberId == member.id || it.recipientName.equals(member.name, ignoreCase = true)
+        }
+
         writer.drawInfoBox(
             listOf(
-                "Target Members: ${committee.memberCount} | Enrolled Active: ${activeMembers.size}",
-                "Monthly Installment: ${FormatUtils.formatPkr(committee.monthlyInstallment)} | Payout: ${FormatUtils.formatPkr(committee.eachPayoutAmount)}"
+                "Member: ${member.name} (#${member.committeeNumber}) • Mobile: ${member.phone}",
+                "Shares: ${FormatUtils.formatShares(member.effectiveShares)} • Monthly Contribution: ${FormatUtils.formatMoney(monthlyContribution, cur)}",
+                "Total Paid: ${FormatUtils.formatMoney(totalPaid, cur)} | Pending: ${FormatUtils.formatMoney(totalRemaining, cur)}"
             )
         )
-        writer.drawTableHeader(listOf("#" to 38f, "Member Name" to 190f, "Mobile Number" to 130f, "Payout Month" to 95f, "Status" to 70f))
+
+        writer.drawSectionHeading("INSTALLMENT PAYMENT HISTORY")
+        writer.drawTableHeader(listOf("Month" to 105f, "Due" to 85f, "Paid" to 85f, "Method" to 85f, "Date" to 80f, "Status" to 83f))
+        memberRows.forEach { rec ->
+            writer.drawTableRow(
+                listOf(
+                    "M${rec.monthIndex} ${MonthUtils.formatMonthDisplay(rec.monthKey)}" to 105f,
+                    FormatUtils.formatCompactNumber(rec.dueAmount) to 85f,
+                    FormatUtils.formatCompactNumber(rec.paidAmount) to 85f,
+                    PaymentMethod.fromRaw(rec.paymentMethod).label to 85f,
+                    (rec.paymentDate ?: "-") to 80f,
+                    rec.status to 83f
+                ),
+                statusColor = colorForInstallment(rec.statusEnum)
+            )
+        }
+
+        if (memberTurns.isNotEmpty()) {
+            writer.drawSectionHeading("COMMITTEE PAYOUT TURNS (${memberTurns.size})")
+            writer.drawTableHeader(listOf("Turn" to 55f, "Month" to 120f, "Payout Amount" to 130f, "Payout Date" to 118f, "Status" to 100f))
+            memberTurns.forEach { t ->
+                writer.drawTableRow(
+                    listOf(
+                        "Turn #${t.turnNumber}" to 55f,
+                        MonthUtils.formatMonthDisplay(t.scheduledMonth) to 120f,
+                        FormatUtils.formatMoney(t.payoutAmount, cur) to 130f,
+                        (t.payoutDate?.takeIf { it.isNotBlank() } ?: "Unknown") to 118f,
+                        t.status to 100f
+                    ),
+                    statusColor = if (t.statusEnum == PayoutStatus.PAID) Color.rgb(22, 163, 74) else Color.rgb(217, 119, 6)
+                )
+            }
+        }
+    }
+
+    private fun writeCompleteMemberList(
+        writer: PdfPageWriter,
+        committee: Committee?,
+        members: List<CommitteeMember>,
+        cur: String
+    ) {
+        if (committee == null) {
+            writer.drawInfoBox(listOf("No committee selected."))
+            return
+        }
+        val activeMembers = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.sortedBy { it.committeeNumber }
+        val archivedMembers = members.filter { it.memberStatusEnum == MemberStatus.ARCHIVED }.sortedBy { it.committeeNumber }
+        val sumShares = activeMembers.sumOf { it.effectiveShares }
+        writer.drawInfoBox(
+            listOf(
+                "Committee: ${committee.name} • Active Members: ${activeMembers.size} (Target ${committee.memberCount})",
+                "Configured Shares: ${committee.effectiveTotalShares} | Assigned Member Shares: ${FormatUtils.formatShares(sumShares)} | Per Share: ${FormatUtils.formatMoney(committee.monthlyInstallment, cur)}"
+            )
+        )
+        writer.drawTableHeader(listOf("#" to 34f, "Member Name" to 155f, "Mobile Number" to 115f, "Shares" to 55f, "Monthly" to 95f, "Status" to 69f))
         activeMembers.forEach { m ->
             writer.drawTableRow(
                 listOf(
-                    "#${m.committeeNumber}" to 38f,
-                    m.name to 190f,
-                    m.phone to 130f,
-                    MonthUtils.formatMonthDisplay(m.payoutMonth) to 95f,
-                    m.status to 70f
+                    "#${m.committeeNumber}" to 34f,
+                    m.name to 155f,
+                    m.phone to 115f,
+                    FormatUtils.formatShares(m.effectiveShares) to 55f,
+                    FormatUtils.formatMoney(m.monthlyDue(committee.monthlyInstallment), cur) to 95f,
+                    m.status to 69f
                 ),
                 statusColor = Color.rgb(11, 110, 79)
             )
@@ -225,11 +327,12 @@ object PdfReportGenerator {
             archivedMembers.forEach { m ->
                 writer.drawTableRow(
                     listOf(
-                        "#${m.committeeNumber}" to 38f,
-                        m.name to 190f,
-                        m.phone to 130f,
-                        MonthUtils.formatMonthDisplay(m.payoutMonth) to 95f,
-                        m.status to 70f
+                        "#${m.committeeNumber}" to 34f,
+                        m.name to 155f,
+                        m.phone to 115f,
+                        FormatUtils.formatShares(m.effectiveShares) to 55f,
+                        FormatUtils.formatMoney(m.monthlyDue(committee.monthlyInstallment), cur) to 95f,
+                        m.status to 69f
                     ),
                     statusColor = Color.GRAY
                 )
@@ -237,7 +340,12 @@ object PdfReportGenerator {
         }
     }
 
-    private fun writeMonthlyPaymentReport(writer: PdfPageWriter, monthKey: String, installments: List<InstallmentRecord>) {
+    private fun writeMonthlyCollectionReport(
+        writer: PdfPageWriter,
+        monthKey: String,
+        installments: List<InstallmentRecord>,
+        cur: String
+    ) {
         val monthItems = installments.filter { it.monthKey == monthKey }.sortedBy { it.committeeNumber }
         val received = monthItems.sumOf { it.paidAmount }
         val pending = monthItems.sumOf { it.remainingAmount }
@@ -245,155 +353,113 @@ object PdfReportGenerator {
         writer.drawInfoBox(
             listOf(
                 "Month: ${MonthUtils.formatMonthDisplay(monthKey)} | Paid: $paidCount / ${monthItems.size}",
-                "Received: ${FormatUtils.formatPkr(received)} | Pending: ${FormatUtils.formatPkr(pending)}"
+                "Total Received: ${FormatUtils.formatMoney(received, cur)} | Total Pending: ${FormatUtils.formatMoney(pending, cur)}"
             )
         )
-        writer.drawTableHeader(listOf("#" to 34f, "Member" to 155f, "Due" to 85f, "Paid" to 85f, "Date" to 84f, "Status" to 80f))
+        writer.drawTableHeader(listOf("#" to 32f, "Member" to 135f, "Due" to 75f, "Paid" to 75f, "Method" to 78f, "Date" to 68f, "Status" to 60f))
         monthItems.forEach { rec ->
             writer.drawTableRow(
                 listOf(
-                    "#${rec.committeeNumber}" to 34f,
-                    rec.memberName to 155f,
-                    FormatUtils.formatCompactNumber(rec.dueAmount) to 85f,
-                    FormatUtils.formatCompactNumber(rec.paidAmount) to 85f,
-                    (rec.paymentDate ?: "-") to 84f,
-                    rec.status to 80f
+                    "#${rec.committeeNumber}" to 32f,
+                    rec.memberName to 135f,
+                    FormatUtils.formatCompactNumber(rec.dueAmount) to 75f,
+                    FormatUtils.formatCompactNumber(rec.paidAmount) to 75f,
+                    PaymentMethod.fromRaw(rec.paymentMethod).label to 78f,
+                    (rec.paymentDate ?: "-") to 68f,
+                    rec.status to 60f
                 ),
                 statusColor = colorForInstallment(rec.statusEnum)
             )
         }
     }
 
-    private fun writePaidMembersReport(writer: PdfPageWriter, monthKey: String, installments: List<InstallmentRecord>) {
-        val paid = installments
-            .filter { it.monthKey == monthKey && it.statusEnum == InstallmentStatus.PAID }
-            .sortedBy { it.committeeNumber }
-        val totalPaidAmt = paid.sumOf { it.paidAmount }
-        writer.drawInfoBox(
-            listOf(
-                "Month: ${MonthUtils.formatMonthDisplay(monthKey)} | Paid Members: ${paid.size}",
-                "Total Collected from Paid Members: ${FormatUtils.formatPkr(totalPaidAmt)}"
-            )
-        )
-        writer.drawTableHeader(listOf("#" to 38f, "Member Name" to 190f, "Mobile" to 125f, "Amount Paid" to 95f, "Date" to 75f))
-        paid.forEach { rec ->
-            writer.drawTableRow(
-                listOf(
-                    "#${rec.committeeNumber}" to 38f,
-                    rec.memberName to 190f,
-                    rec.memberPhone to 125f,
-                    FormatUtils.formatPkr(rec.paidAmount) to 95f,
-                    (rec.paymentDate ?: "-") to 75f
-                ),
-                statusColor = Color.rgb(22, 163, 74)
-            )
-        }
-    }
-
-    private fun writeUnpaidMembersReport(writer: PdfPageWriter, monthKey: String, installments: List<InstallmentRecord>) {
+    private fun writePendingPaymentsReport(
+        writer: PdfPageWriter,
+        monthKey: String,
+        installments: List<InstallmentRecord>,
+        cur: String
+    ) {
         val unpaidOrPartial = installments
             .filter { it.monthKey == monthKey && it.statusEnum != InstallmentStatus.PAID }
             .sortedBy { it.committeeNumber }
         val totalPendingAmt = unpaidOrPartial.sumOf { it.remainingAmount }
         writer.drawInfoBox(
             listOf(
-                "Month: ${MonthUtils.formatMonthDisplay(monthKey)} | Unpaid / Partial Members: ${unpaidOrPartial.size}",
-                "Total Pending Collection: ${FormatUtils.formatPkr(totalPendingAmt)}"
+                "Month: ${MonthUtils.formatMonthDisplay(monthKey)} | Unpaid / Partial Entries: ${unpaidOrPartial.size}",
+                "Total Pending Collection: ${FormatUtils.formatMoney(totalPendingAmt, cur)}"
             )
         )
-        writer.drawTableHeader(listOf("#" to 38f, "Member Name" to 170f, "Mobile" to 120f, "Remaining" to 105f, "Status" to 90f))
+        writer.drawTableHeader(listOf("#" to 36f, "Member Name" to 170f, "Mobile" to 118f, "Remaining" to 108f, "Status" to 91f))
         unpaidOrPartial.forEach { rec ->
             writer.drawTableRow(
                 listOf(
-                    "#${rec.committeeNumber}" to 38f,
+                    "#${rec.committeeNumber}" to 36f,
                     rec.memberName to 170f,
-                    rec.memberPhone to 120f,
-                    FormatUtils.formatPkr(rec.remainingAmount) to 105f,
-                    rec.status to 90f
+                    rec.memberPhone to 118f,
+                    FormatUtils.formatMoney(rec.remainingAmount, cur) to 108f,
+                    rec.status to 91f
                 ),
                 statusColor = colorForInstallment(rec.statusEnum)
             )
         }
     }
 
-    private fun writePaidUnpaidReport(writer: PdfPageWriter, monthKey: String, installments: List<InstallmentRecord>) {
-        val monthItems = installments.filter { it.monthKey == monthKey }.sortedBy { it.committeeNumber }
-        val paid = monthItems.filter { it.statusEnum == InstallmentStatus.PAID }
-        val unpaidOrPartial = monthItems.filter { it.statusEnum != InstallmentStatus.PAID }
-
-        writer.drawSectionHeading("PAID MEMBERS (${paid.size})")
-        writer.drawTableHeader(listOf("#" to 38f, "Member Name" to 190f, "Mobile" to 125f, "Amount Paid" to 95f, "Date" to 75f))
+    private fun writeCompletedPaymentsReport(
+        writer: PdfPageWriter,
+        monthKey: String,
+        installments: List<InstallmentRecord>,
+        cur: String
+    ) {
+        val paid = installments
+            .filter { it.monthKey == monthKey && it.statusEnum == InstallmentStatus.PAID }
+            .sortedBy { it.committeeNumber }
+        val totalPaidAmt = paid.sumOf { it.paidAmount }
+        writer.drawInfoBox(
+            listOf(
+                "Month: ${MonthUtils.formatMonthDisplay(monthKey)} | Completed Payments: ${paid.size}",
+                "Total Completed Collection: ${FormatUtils.formatMoney(totalPaidAmt, cur)}"
+            )
+        )
+        writer.drawTableHeader(listOf("#" to 34f, "Member Name" to 145f, "Amount Paid" to 92f, "Method" to 85f, "Tx ID" to 92f, "Date" to 75f))
         paid.forEach { rec ->
             writer.drawTableRow(
                 listOf(
-                    "#${rec.committeeNumber}" to 38f,
-                    rec.memberName to 190f,
-                    rec.memberPhone to 125f,
-                    FormatUtils.formatPkr(rec.paidAmount) to 95f,
+                    "#${rec.committeeNumber}" to 34f,
+                    rec.memberName to 145f,
+                    FormatUtils.formatMoney(rec.paidAmount, cur) to 92f,
+                    PaymentMethod.fromRaw(rec.paymentMethod).label to 85f,
+                    (rec.transactionId?.takeIf { it.isNotBlank() } ?: "-") to 92f,
                     (rec.paymentDate ?: "-") to 75f
                 ),
                 statusColor = Color.rgb(22, 163, 74)
             )
         }
-
-        writer.drawSectionHeading("UNPAID / PARTIAL MEMBERS (${unpaidOrPartial.size})")
-        writer.drawTableHeader(listOf("#" to 38f, "Member Name" to 170f, "Mobile" to 120f, "Remaining" to 105f, "Status" to 90f))
-        unpaidOrPartial.forEach { rec ->
-            writer.drawTableRow(
-                listOf(
-                    "#${rec.committeeNumber}" to 38f,
-                    rec.memberName to 170f,
-                    rec.memberPhone to 120f,
-                    FormatUtils.formatPkr(rec.remainingAmount) to 105f,
-                    rec.status to 90f
-                ),
-                statusColor = colorForInstallment(rec.statusEnum)
-            )
-        }
     }
 
-    private fun writeIndividualHistory(writer: PdfPageWriter, member: CommitteeMember?, installments: List<InstallmentRecord>) {
-        if (member == null) {
-            writer.drawInfoBox(listOf("No member selected."))
+    private fun writeIndividualCommitteeReport(
+        writer: PdfPageWriter,
+        committee: Committee?,
+        members: List<CommitteeMember>,
+        installments: List<InstallmentRecord>,
+        turns: List<CommitteeTurn>,
+        summary: DashboardSummary?,
+        cur: String
+    ) {
+        if (committee == null) {
+            writer.drawInfoBox(listOf("No committee selected."))
             return
         }
-        val memberRows = installments.filter { it.memberId == member.id }.sortedBy { it.monthIndex }
-        val totalPaid = memberRows.sumOf { it.paidAmount }
-        val totalRemaining = memberRows.sumOf { it.remainingAmount }
+        val totalCollected = installments.sumOf { it.paidAmount }
+        val activeCount = members.count { it.memberStatusEnum == MemberStatus.ACTIVE }
         writer.drawInfoBox(
             listOf(
-                "Member: ${member.name} (#${member.committeeNumber}) • Mobile: ${member.phone}",
-                "Payout Month: ${MonthUtils.formatMonthDisplay(member.payoutMonth)} (${member.payoutStatus}) | Paid: ${FormatUtils.formatPkr(totalPaid)} | Due: ${FormatUtils.formatPkr(totalRemaining)}"
+                "Committee: ${committee.name} (${committee.status}) • ${committee.startMonth} → ${committee.endMonth}",
+                "Members: $activeCount/${committee.memberCount} | Shares: ${committee.effectiveTotalShares} @ ${FormatUtils.formatMoney(committee.monthlyInstallment, cur)}",
+                "Monthly Pool: ${FormatUtils.formatMoney(committee.monthlyCollectionTotal, cur)} | Total Collected: ${FormatUtils.formatMoney(totalCollected, cur)}"
             )
         )
-        writer.drawTableHeader(listOf("Month" to 110f, "Due" to 95f, "Paid" to 95f, "Date" to 95f, "Status" to 128f))
-        memberRows.forEach { rec ->
-            writer.drawTableRow(
-                listOf(
-                    "M${rec.monthIndex} ${MonthUtils.formatMonthDisplay(rec.monthKey)}" to 110f,
-                    FormatUtils.formatPkr(rec.dueAmount) to 95f,
-                    FormatUtils.formatPkr(rec.paidAmount) to 95f,
-                    (rec.paymentDate ?: "-") to 95f,
-                    rec.status to 128f
-                ),
-                statusColor = colorForInstallment(rec.statusEnum)
-            )
-        }
-    }
-
-    private fun writeCollectionReport(
-        writer: PdfPageWriter,
-        committee: Committee,
-        installments: List<InstallmentRecord>,
-        summary: DashboardSummary
-    ) {
-        writer.drawInfoBox(
-            listOf(
-                "Total Collected (All Months): ${FormatUtils.formatPkr(summary.totalCommitteeCollectedAllMonths)}",
-                "Total Expected: ${FormatUtils.formatPkr(committee.totalCommitteeAmount)} | Monthly Target: ${FormatUtils.formatPkr(committee.monthlyCollectionTotal)}"
-            )
-        )
-        writer.drawTableHeader(listOf("Month" to 130f, "Paid Count" to 90f, "Collected" to 115f, "Target" to 115f, "Balance" to 73f))
+        writer.drawSectionHeading("COLLECTION BY MONTH")
+        writer.drawTableHeader(listOf("Month" to 130f, "Paid Count" to 90f, "Collected" to 115f, "Target" to 115f, "Pending" to 73f))
         val grouped = installments.groupBy { it.monthKey }
         MonthUtils.monthKeysForCommittee(committee.startMonth, committee.totalMonths.toInt()).forEachIndexed { idx, key ->
             val rows = grouped[key].orEmpty()
@@ -404,57 +470,152 @@ object PdfReportGenerator {
                 listOf(
                     "M${idx + 1} ${MonthUtils.formatMonthDisplay(key)}" to 130f,
                     "$paidCount / ${rows.size}" to 90f,
-                    FormatUtils.formatPkr(collected) to 115f,
-                    FormatUtils.formatPkr(target) to 115f,
+                    FormatUtils.formatMoney(collected, cur) to 115f,
+                    FormatUtils.formatMoney(target, cur) to 115f,
                     FormatUtils.formatCompactNumber((target - collected).coerceAtLeast(0L)) to 73f
                 ),
                 statusColor = if (collected >= target && target > 0) Color.rgb(22, 163, 74) else Color.rgb(217, 119, 6)
             )
         }
+        writer.drawSectionHeading("COMMITTEE PAYOUT TURNS")
+        writeCommitteePayoutReport(writer, committee, members, turns, cur)
     }
 
-    private fun writePayoutReport(writer: PdfPageWriter, committee: Committee, members: List<CommitteeMember>) {
-        val sorted = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.sortedBy { it.committeeNumber }
-        val completed = sorted.count { it.payoutStatusEnum == PayoutStatus.PAID }
+    private fun writeCommitteePayoutReport(
+        writer: PdfPageWriter,
+        committee: Committee?,
+        members: List<CommitteeMember>,
+        turns: List<CommitteeTurn>,
+        cur: String
+    ) {
+        if (committee == null) {
+            writer.drawInfoBox(listOf("No committee selected."))
+            return
+        }
+        if (turns.isNotEmpty()) {
+            val sortedTurns = turns.sortedBy { it.turnNumber }
+            val completed = sortedTurns.count { it.statusEnum == PayoutStatus.PAID }
+            val paidSum = sortedTurns.filter { it.statusEnum == PayoutStatus.PAID }.sumOf { it.payoutAmount }
+            writer.drawInfoBox(
+                listOf(
+                    "Payout Turns Completed: $completed / ${sortedTurns.size} | Collection Window: ${committee.collectionDayStart}th – ${committee.collectionDayEnd}th",
+                    "Total Payouts Distributed: ${FormatUtils.formatMoney(paidSum, cur)}"
+                )
+            )
+            writer.drawTableHeader(listOf("Turn" to 46f, "Recipient" to 165f, "Schedule" to 105f, "Amount" to 92f, "Date" to 60f, "Status" to 55f))
+            sortedTurns.forEach { t ->
+                writer.drawTableRow(
+                    listOf(
+                        "#${t.turnNumber}" to 46f,
+                        t.recipientName to 165f,
+                        MonthUtils.formatMonthDisplay(t.scheduledMonth) to 105f,
+                        FormatUtils.formatCompactNumber(t.payoutAmount) to 92f,
+                        (t.payoutDate?.takeIf { it.isNotBlank() } ?: "Unknown") to 60f,
+                        t.status to 55f
+                    ),
+                    statusColor = if (t.statusEnum == PayoutStatus.PAID) Color.rgb(22, 163, 74) else Color.rgb(217, 119, 6)
+                )
+            }
+        } else {
+            val sorted = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.sortedBy { it.committeeNumber }
+            val completed = sorted.count { it.payoutStatusEnum == PayoutStatus.PAID }
+            writer.drawInfoBox(
+                listOf(
+                    "Completed Payouts: $completed / ${sorted.size} | Payout Day: ${committee.payoutDay}th",
+                    "Pool Amount: ${FormatUtils.formatMoney(committee.eachPayoutAmount, cur)}"
+                )
+            )
+            writer.drawTableHeader(listOf("#" to 36f, "Member Name" to 165f, "Payout Month" to 100f, "Amount" to 100f, "Date" to 65f, "Status" to 57f))
+            sorted.forEach { m ->
+                val amt = if (m.payoutAmount > 0) m.payoutAmount else committee.eachPayoutAmount
+                writer.drawTableRow(
+                    listOf(
+                        "#${m.committeeNumber}" to 36f,
+                        m.name to 165f,
+                        MonthUtils.formatMonthDisplay(m.payoutMonth) to 100f,
+                        FormatUtils.formatCompactNumber(amt) to 100f,
+                        (m.payoutDate ?: "-") to 65f,
+                        m.payoutStatus to 57f
+                    ),
+                    statusColor = if (m.payoutStatusEnum == PayoutStatus.PAID) Color.rgb(22, 163, 74) else Color.rgb(217, 119, 6)
+                )
+            }
+        }
+    }
+
+    private fun writePreviousCommitteeHistory(
+        writer: PdfPageWriter,
+        oldRecords: List<OldCommitteeRecord>
+    ) {
         writer.drawInfoBox(
             listOf(
-                "Completed Payouts: $completed / ${sorted.size} | Payout Day: ${committee.payoutDay}th of month",
-                "Each Member Payout: ${FormatUtils.formatPkr(committee.eachPayoutAmount)}"
+                "Total Historical / Previous Committee Records: ${oldRecords.size}",
+                "Note: Blank or 'Unknown' indicates historical details not recorded earlier."
             )
         )
-        writer.drawTableHeader(listOf("#" to 36f, "Member Name" to 165f, "Payout Month" to 100f, "Amount" to 100f, "Date" to 65f, "Status" to 57f))
-        sorted.forEach { m ->
-            val amt = if (m.payoutAmount > 0) m.payoutAmount else committee.eachPayoutAmount
+        if (oldRecords.isEmpty()) {
+            writer.drawInfoBox(listOf("No previous committee history records added yet."))
+            return
+        }
+        writer.drawTableHeader(listOf("No." to 55f, "Committee" to 135f, "Recipient" to 115f, "Payout" to 85f, "Date" to 68f, "Status" to 65f))
+        oldRecords.forEach { r ->
             writer.drawTableRow(
                 listOf(
-                    "#${m.committeeNumber}" to 36f,
-                    m.name to 165f,
-                    MonthUtils.formatMonthDisplay(m.payoutMonth) to 100f,
-                    FormatUtils.formatCompactNumber(amt) to 100f,
-                    (m.payoutDate ?: "-") to 65f,
-                    m.payoutStatus to 57f
+                    r.committeeNumber.ifBlank { "-" } to 55f,
+                    r.committeeName.ifBlank { "-" } to 135f,
+                    r.payoutRecipient.ifBlank { "Unknown" } to 115f,
+                    r.payoutAmount.ifBlank { "-" } to 85f,
+                    r.payoutDate.ifBlank { "Unknown" } to 68f,
+                    r.status.ifBlank { "COMPLETED" } to 65f
                 ),
-                statusColor = if (m.payoutStatusEnum == PayoutStatus.PAID) Color.rgb(22, 163, 74) else Color.rgb(217, 119, 6)
+                statusColor = Color.rgb(11, 110, 79)
             )
         }
     }
 
-    private fun writeCompleteSummary(
+    private fun writeCompleteFinancialSummary(
         writer: PdfPageWriter,
-        committee: Committee,
+        activeCommittee: Committee?,
+        allCommittees: List<Committee>,
         members: List<CommitteeMember>,
         installments: List<InstallmentRecord>,
-        summary: DashboardSummary
+        turns: List<CommitteeTurn>,
+        oldRecords: List<OldCommitteeRecord>,
+        summary: DashboardSummary?,
+        cur: String
     ) {
+        val activeCount = allCommittees.count { it.statusEnum == CommitteeStatus.ACTIVE }
+        val completedCount = allCommittees.count { it.statusEnum == CommitteeStatus.COMPLETED }
+        val totalReceived = summary?.totalCommitteeCollectedAllMonths ?: installments.sumOf { it.paidAmount }
+        val totalPendingCurrent = summary?.currentMonthPending ?: 0L
+        val totalPayoutsDistributed = turns.filter { it.statusEnum == PayoutStatus.PAID }.sumOf { it.payoutAmount }
+
         writer.drawInfoBox(
             listOf(
-                "Committee: ${committee.name} (${committee.status}) | ${committee.startMonth} to ${committee.endMonth}",
-                "Members: ${summary.activeMemberCount}/${committee.memberCount} | Installment: ${FormatUtils.formatPkr(committee.monthlyInstallment)} | Collected: ${FormatUtils.formatPkr(summary.totalCommitteeCollectedAllMonths)}"
+                "Active Committees: $activeCount | Completed Committees: $completedCount | Old History Entries: ${oldRecords.size}",
+                "Active Committee: ${activeCommittee?.name ?: "-"} | Total Collected: ${FormatUtils.formatMoney(totalReceived, cur)}",
+                "Current Month Pending: ${FormatUtils.formatMoney(totalPendingCurrent, cur)} | Total Payouts Paid: ${FormatUtils.formatMoney(totalPayoutsDistributed, cur)}"
             )
         )
-        writeCollectionReport(writer, committee, installments, summary)
-        writer.drawSectionHeading("PAYOUT SCHEDULE")
-        writePayoutReport(writer, committee, members)
+        if (allCommittees.isNotEmpty()) {
+            writer.drawSectionHeading("ALL COMMITTEES OVERVIEW")
+            writer.drawTableHeader(listOf("Committee Name" to 180f, "Shares" to 60f, "Monthly Pool" to 115f, "Period" to 105f, "Status" to 63f))
+            allCommittees.forEach { c ->
+                writer.drawTableRow(
+                    listOf(
+                        c.name to 180f,
+                        c.effectiveTotalShares.toString() to 60f,
+                        FormatUtils.formatMoney(c.monthlyCollectionTotal, cur) to 115f,
+                        "${c.startMonth}..${c.endMonth}" to 105f,
+                        c.status to 63f
+                    ),
+                    statusColor = if (c.statusEnum == CommitteeStatus.ACTIVE) Color.rgb(22, 163, 74) else Color.rgb(11, 110, 79)
+                )
+            }
+        }
+        if (activeCommittee != null) {
+            writeIndividualCommitteeReport(writer, activeCommittee, members, installments, turns, summary, cur)
+        }
     }
 
     private fun colorForInstallment(status: InstallmentStatus): Int = when (status) {
@@ -465,7 +626,8 @@ object PdfReportGenerator {
 
     private class PdfPageWriter(
         private val document: PdfDocument,
-        private val committeeName: String
+        private val committeeName: String,
+        private val companySettings: AppCompanySettings
     ) {
         private var currentPage: PdfDocument.Page? = null
         private var canvas: Canvas? = null
@@ -481,21 +643,13 @@ object PdfReportGenerator {
         }
         private val subtitlePaint = Paint().apply {
             color = Color.rgb(235, 248, 242)
-            textSize = 10.5f
+            textSize = 10f
             isAntiAlias = true
         }
-        private val headerBgPaint = Paint().apply {
-            color = Color.rgb(11, 110, 79)
-        }
-        private val goldStripPaint = Paint().apply {
-            color = Color.rgb(197, 155, 39)
-        }
-        private val infoBgPaint = Paint().apply {
-            color = Color.rgb(240, 247, 244)
-        }
-        private val tableHeaderBgPaint = Paint().apply {
-            color = Color.rgb(226, 238, 232)
-        }
+        private val headerBgPaint = Paint().apply { color = Color.rgb(11, 110, 79) }
+        private val goldStripPaint = Paint().apply { color = Color.rgb(197, 155, 39) }
+        private val infoBgPaint = Paint().apply { color = Color.rgb(240, 247, 244) }
+        private val tableHeaderBgPaint = Paint().apply { color = Color.rgb(226, 238, 232) }
         private val rowDividerPaint = Paint().apply {
             color = Color.rgb(215, 226, 220)
             strokeWidth = 0.8f
@@ -527,10 +681,9 @@ object PdfReportGenerator {
             val c = page.canvas
             canvas = c
 
-            // Brand header banner
             c.drawRect(0f, 0f, PAGE_WIDTH.toFloat(), 66f, headerBgPaint)
             c.drawRect(0f, 66f, PAGE_WIDTH.toFloat(), 70f, goldStripPaint)
-            c.drawText("GM HASMANI COMMITTEE MANAGER", MARGIN, 28f, brandPaint)
+            c.drawText(companySettings.companyName.uppercase(Locale.US), MARGIN, 28f, brandPaint)
             c.drawText("$committeeName  •  $subtitle", MARGIN, 48f, subtitlePaint)
             y = 88f
         }
@@ -584,7 +737,7 @@ object PdfReportGenerator {
                 } else {
                     textPaint
                 }
-                val clipped = if (value.length > 28) value.take(26) + ".." else value
+                val clipped = if (value.length > 26) value.take(24) + ".." else value
                 c.drawText(clipped, x, y + 13f, paint)
                 x += width
             }
@@ -596,8 +749,9 @@ object PdfReportGenerator {
             val page = currentPage ?: return
             val c = canvas
             val timestamp = SimpleDateFormat("dd MMM yyyy HH:mm", Locale.US).format(Date())
-            c?.drawText("Generated by GM HASMANI Committee Manager • $timestamp", MARGIN, PAGE_HEIGHT - 16f, footerPaint)
-            c?.drawText("Page $pageNumber", PAGE_WIDTH - MARGIN - 40f, PAGE_HEIGHT - 16f, footerPaint)
+            val note = companySettings.pdfFooterNote.ifBlank { companySettings.companyName }
+            c?.drawText("$note • $timestamp", MARGIN, PAGE_HEIGHT - 16f, footerPaint)
+            c?.drawText("Page $pageNumber", PAGE_WIDTH - MARGIN - 42f, PAGE_HEIGHT - 16f, footerPaint)
             document.finishPage(page)
             currentPage = null
             canvas = null

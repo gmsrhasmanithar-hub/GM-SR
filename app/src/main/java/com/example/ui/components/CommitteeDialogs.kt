@@ -54,9 +54,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.example.i18n.UiStrings
+import com.example.model.AppCompanySettings
 import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
+import com.example.model.CommitteeTurn
 import com.example.model.CommitteeUtils
 import com.example.model.DuplicateConflictType
 import com.example.model.FormatUtils
@@ -64,6 +66,7 @@ import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MonthUtils
 import com.example.model.PaymentHistoryLog
+import com.example.model.PaymentMethod
 import com.example.ui.theme.StatusPaidGreen
 import com.example.ui.theme.StatusPendingYellow
 import com.example.ui.theme.StatusUnpaidRed
@@ -75,11 +78,13 @@ import java.util.Locale
 fun CommitteeEditorDialog(
     strings: UiStrings,
     existingCommittee: Committee?,
+    defaultSettings: AppCompanySettings = AppCompanySettings(),
     hasRecordedPayments: Boolean,
     onDismiss: () -> Unit,
     onSave: (
         name: String,
         memberCount: Long,
+        totalShares: Long,
         monthlyInstallment: Long,
         totalMonths: Long,
         collectionStartDay: Long,
@@ -90,21 +95,35 @@ fun CommitteeEditorDialog(
     ) -> Unit
 ) {
     var name by remember { mutableStateOf(existingCommittee?.name ?: "") }
-    var memberCountText by remember { mutableStateOf((existingCommittee?.memberCount ?: 10L).toString()) }
-    var installmentText by remember { mutableStateOf((existingCommittee?.monthlyInstallment ?: 5000L).toString()) }
-    var totalMonthsText by remember { mutableStateOf((existingCommittee?.totalMonths ?: 10L).toString()) }
-    var startDayText by remember { mutableStateOf((existingCommittee?.collectionDayStart ?: 28L).toString()) }
-    var endDayText by remember { mutableStateOf((existingCommittee?.collectionDayEnd ?: 8L).toString()) }
-    var payoutDayText by remember { mutableStateOf((existingCommittee?.payoutDay ?: 10L).toString()) }
+    var memberCountText by remember {
+        mutableStateOf((existingCommittee?.memberCount ?: defaultSettings.defaultTotalShares).toString())
+    }
+    var totalSharesText by remember {
+        mutableStateOf((existingCommittee?.effectiveTotalShares ?: defaultSettings.defaultTotalShares).toString())
+    }
+    var sharesSyncedToMembers by remember { mutableStateOf(existingCommittee == null) }
+    var installmentText by remember {
+        mutableStateOf((existingCommittee?.monthlyInstallment ?: defaultSettings.defaultMonthlyContribution).toString())
+    }
+    var totalMonthsText by remember {
+        mutableStateOf((existingCommittee?.totalMonths ?: defaultSettings.defaultDurationMonths).toString())
+    }
+    var startDayText by remember {
+        mutableStateOf((existingCommittee?.collectionDayStart ?: defaultSettings.defaultCollectionStartDay).toString())
+    }
+    var endDayText by remember {
+        mutableStateOf((existingCommittee?.collectionDayEnd ?: defaultSettings.defaultCollectionEndDay).toString())
+    }
+    var payoutDayText by remember { mutableStateOf((existingCommittee?.payoutDay ?: 8L).toString()) }
     var startMonth by remember { mutableStateOf(existingCommittee?.startMonth ?: MonthUtils.currentMonthKey()) }
     var notes by remember { mutableStateOf(existingCommittee?.notes ?: "") }
     var validationError by remember { mutableStateOf<String?>(null) }
     var showStartedWarning by remember { mutableStateOf(false) }
 
-    val parsedMembers = memberCountText.toLongOrNull()?.coerceIn(2L, 200L) ?: 0L
+    val parsedShares = totalSharesText.toLongOrNull()?.coerceIn(1L, 500L) ?: 0L
     val parsedInstallment = installmentText.toLongOrNull()?.coerceIn(100L, 10_000_000L) ?: 0L
     val parsedMonths = totalMonthsText.toLongOrNull()?.coerceIn(2L, 200L) ?: 0L
-    val monthlyCollection = parsedMembers * parsedInstallment
+    val monthlyCollection = parsedShares * parsedInstallment
     val totalCommitteeAmount = monthlyCollection * parsedMonths
     val computedEndMonth = if (MonthUtils.isValidMonthKey(startMonth) && parsedMonths >= 2) {
         MonthUtils.addMonths(startMonth, (parsedMonths - 1).toInt())
@@ -112,6 +131,7 @@ fun CommitteeEditorDialog(
 
     fun attemptSave(bypassWarning: Boolean) {
         val mCount = memberCountText.toLongOrNull()
+        val sCount = totalSharesText.toLongOrNull()
         val inst = installmentText.toLongOrNull()
         val months = totalMonthsText.toLongOrNull()
         val sDay = startDayText.toLongOrNull()
@@ -120,20 +140,24 @@ fun CommitteeEditorDialog(
 
         when {
             name.trim().isEmpty() -> validationError = "Committee name is required"
-            mCount == null || mCount !in 2L..200L -> validationError = "Member count must be between 2 and 200"
-            inst == null || inst !in 100L..10_000_000L -> validationError = "Installment must be at least PKR 100"
+            mCount == null || mCount !in 1L..500L -> validationError = "Member count must be between 1 and 500"
+            sCount == null || sCount !in 1L..500L -> validationError = "Total shares must be between 1 and 500"
+            inst == null || inst !in 100L..10_000_000L -> validationError = "Installment must be at least ${defaultSettings.currency} 100"
             months == null || months !in 2L..200L -> validationError = "Duration must be between 2 and 200 months"
             sDay == null || sDay !in 1L..31L -> validationError = "Collection start day must be 1–31"
             eDay == null || eDay !in 1L..31L -> validationError = "Collection end day must be 1–31"
             pDay == null || pDay !in 1L..31L -> validationError = "Payout day must be 1–31"
             !MonthUtils.isValidMonthKey(startMonth.trim()) -> validationError = "Start month must be YYYY-MM (e.g. 2026-11)"
             !bypassWarning && existingCommittee != null && hasRecordedPayments &&
-                (mCount != existingCommittee.memberCount || inst != existingCommittee.monthlyInstallment || months != existingCommittee.totalMonths) -> {
+                (mCount != existingCommittee.memberCount ||
+                    sCount != existingCommittee.effectiveTotalShares ||
+                    inst != existingCommittee.monthlyInstallment ||
+                    months != existingCommittee.totalMonths) -> {
                 showStartedWarning = true
             }
             else -> {
                 onSave(
-                    name.trim(), mCount, inst, months, sDay, eDay, pDay,
+                    name.trim(), mCount, sCount, inst, months, sDay, eDay, pDay,
                     startMonth.trim(), notes.trim().takeIf { it.isNotEmpty() }
                 )
             }
@@ -172,7 +196,7 @@ fun CommitteeEditorDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 460.dp)
+                    .heightIn(max = 470.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -190,12 +214,15 @@ fun CommitteeEditorDialog(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(5, 10, 15, 20, 25, 50).forEach { count ->
+                    listOf(5, 7, 10, 15, 20, 25).forEach { count ->
                         FilterChip(
                             selected = memberCountText == count.toString(),
                             onClick = {
                                 memberCountText = count.toString()
-                                if (existingCommittee == null) totalMonthsText = count.toString()
+                                if (sharesSyncedToMembers && existingCommittee == null) {
+                                    totalSharesText = count.toString()
+                                    totalMonthsText = count.toString()
+                                }
                             },
                             label = { Text("$count") }
                         )
@@ -206,7 +233,8 @@ fun CommitteeEditorDialog(
                         value = memberCountText,
                         onValueChange = {
                             memberCountText = it.filter { c -> c.isDigit() }
-                            if (existingCommittee == null && memberCountText.isNotBlank()) {
+                            if (sharesSyncedToMembers && existingCommittee == null && memberCountText.isNotBlank()) {
+                                totalSharesText = memberCountText
                                 totalMonthsText = memberCountText
                             }
                         },
@@ -216,14 +244,29 @@ fun CommitteeEditorDialog(
                         modifier = Modifier.weight(1f).testTag("committee_members_input")
                     )
                     OutlinedTextField(
-                        value = totalMonthsText,
-                        onValueChange = { totalMonthsText = it.filter { c -> c.isDigit() } },
-                        label = { Text(strings.totalDurationMonths) },
+                        value = totalSharesText,
+                        onValueChange = {
+                            sharesSyncedToMembers = false
+                            totalSharesText = it.filter { c -> c.isDigit() }
+                            if (existingCommittee == null && totalSharesText.isNotBlank()) {
+                                totalMonthsText = totalSharesText
+                            }
+                        },
+                        label = { Text(strings.totalSharesLabel) },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
-                        modifier = Modifier.weight(1f).testTag("committee_months_input")
+                        modifier = Modifier.weight(1f).testTag("committee_shares_input")
                     )
                 }
+
+                OutlinedTextField(
+                    value = totalMonthsText,
+                    onValueChange = { totalMonthsText = it.filter { c -> c.isDigit() } },
+                    label = { Text(strings.totalDurationMonths) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("committee_months_input")
+                )
 
                 Text(strings.monthlyInstallment, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 Row(
@@ -241,7 +284,7 @@ fun CommitteeEditorDialog(
                 OutlinedTextField(
                     value = installmentText,
                     onValueChange = { installmentText = it.filter { c -> c.isDigit() } },
-                    label = { Text(strings.monthlyInstallment) },
+                    label = { Text("${strings.monthlyInstallment} (${defaultSettings.currency})") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("committee_installment_input")
@@ -302,18 +345,18 @@ fun CommitteeEditorDialog(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = "${strings.monthlyCollection}: ${FormatUtils.formatPkr(monthlyCollection)}",
+                            text = "${strings.monthlyCollection}: ${FormatUtils.formatMoney(monthlyCollection, defaultSettings.currency)}",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.primary
                         )
                         Text(
-                            text = "${strings.totalCommitteeAmount}: ${FormatUtils.formatPkr(totalCommitteeAmount)}",
+                            text = "${strings.totalCommitteeAmount}: ${FormatUtils.formatMoney(totalCommitteeAmount, defaultSettings.currency)}",
                             style = MaterialTheme.typography.bodySmall,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "${strings.eachPayoutAmount}: ${FormatUtils.formatPkr(monthlyCollection)} • ${strings.endMonthLabel}: $computedEndMonth",
+                            text = "$parsedShares shares • ${strings.endMonthLabel}: $computedEndMonth",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -364,6 +407,7 @@ fun CommitteeDetailDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 DetailRow(strings.numberOfMembers, "$activeMemberCount / ${committee.memberCount}")
+                DetailRow(strings.totalSharesLabel, "${committee.effectiveTotalShares}")
                 DetailRow(strings.monthlyInstallment, FormatUtils.formatPkr(committee.monthlyInstallment))
                 DetailRow(strings.monthlyCollection, FormatUtils.formatPkr(committee.monthlyCollectionTotal))
                 DetailRow(strings.totalCommitteeAmount, FormatUtils.formatPkr(committee.totalCommitteeAmount))
@@ -402,7 +446,7 @@ fun CommitteeDetailDialog(
 }
 
 @Composable
-private fun DetailRow(label: String, value: String) {
+internal fun DetailRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween
@@ -425,16 +469,25 @@ fun MemberEditorDialog(
     strings: UiStrings,
     existingMember: CommitteeMember?,
     suggestedCommitteeNumber: Long,
+    monthlyShareContribution: Long = 5000L,
     existingMembers: List<CommitteeMember> = emptyList(),
     onDismiss: () -> Unit,
-    onSave: (name: String, phone: String, committeeNumber: Long) -> Unit
+    onSave: (name: String, phone: String, committeeNumber: Long, shares: Double) -> Unit
 ) {
     var name by remember { mutableStateOf(existingMember?.name ?: "") }
     var phone by remember { mutableStateOf(existingMember?.phone ?: "") }
     var numberText by remember {
         mutableStateOf((existingMember?.committeeNumber ?: suggestedCommitteeNumber).toString())
     }
+    var sharesText by remember {
+        mutableStateOf(
+            FormatUtils.formatShares(existingMember?.effectiveShares ?: 1.0)
+        )
+    }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    val parsedShares = sharesText.toDoubleOrNull()?.coerceIn(0.5, 50.0) ?: 1.0
+    val monthlyDuePreview = Math.round(parsedShares * monthlyShareContribution)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -445,12 +498,18 @@ fun MemberEditorDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; errorText = null },
                     label = { Text("${strings.memberName} *") },
-                    placeholder = { Text("e.g. Tariq Hasmani") },
+                    placeholder = { Text("e.g. Ghulam Mustafa") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("member_name_input")
                 )
@@ -471,6 +530,40 @@ fun MemberEditorDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("member_number_input")
                 )
+
+                Text(strings.memberSharesLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("0.5", "1", "2", "3").forEach { preset ->
+                        FilterChip(
+                            selected = sharesText == preset,
+                            onClick = { sharesText = preset; errorText = null },
+                            label = { Text("$preset Share${if (preset == "1") "" else "s"}") }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = sharesText,
+                    onValueChange = { sharesText = it.filter { c -> c.isDigit() || c == '.' }; errorText = null },
+                    label = { Text("${strings.memberSharesLabel} (e.g. 1 or 2)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("member_shares_input")
+                )
+
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "${strings.monthlyContributionLabel}: ${FormatUtils.formatPkr(monthlyDuePreview)}",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+
                 if (errorText != null) {
                     Text(
                         text = errorText ?: "",
@@ -484,6 +577,7 @@ fun MemberEditorDialog(
             Button(
                 onClick = {
                     val num = numberText.toLongOrNull()
+                    val shares = sharesText.toDoubleOrNull()
                     val conflict = if (num != null && existingMembers.isNotEmpty()) {
                         CommitteeUtils.findDuplicateMember(
                             members = existingMembers,
@@ -496,11 +590,12 @@ fun MemberEditorDialog(
                         name.trim().isEmpty() -> errorText = "Member name is required"
                         phone.trim().filter { it.isDigit() }.length < 7 -> errorText = "Enter a valid mobile number"
                         num == null || num !in 1L..500L -> errorText = "Committee number must be >= 1"
+                        shares == null || shares <= 0.0 || shares > 50.0 -> errorText = "Shares must be between 0.5 and 50"
                         conflict?.type == DuplicateConflictType.PHONE ->
                             errorText = "Mobile number already belongs to #${conflict.existingMember.committeeNumber} ${conflict.existingMember.name}"
                         conflict?.type == DuplicateConflictType.COMMITTEE_NUMBER ->
                             errorText = "Committee #$num is already assigned to ${conflict.existingMember.name}"
-                        else -> onSave(name.trim(), phone.trim(), num)
+                        else -> onSave(name.trim(), phone.trim(), num, shares)
                     }
                 },
                 modifier = Modifier.testTag("save_member_button")
@@ -521,7 +616,14 @@ fun RecordPaymentDialog(
     logs: List<PaymentHistoryLog>,
     onDismiss: () -> Unit,
     onReversePayment: ((reason: String) -> Unit)? = null,
-    onSave: (paidAmount: Long, status: InstallmentStatus, paymentDate: String, note: String?) -> Unit
+    onSave: (
+        paidAmount: Long,
+        status: InstallmentStatus,
+        paymentDate: String,
+        paymentMethod: PaymentMethod,
+        transactionId: String?,
+        note: String?
+    ) -> Unit
 ) {
     var selectedStatus by remember { mutableStateOf(record.statusEnum) }
     var paidAmountText by remember {
@@ -531,6 +633,8 @@ fun RecordPaymentDialog(
         )
     }
     var paymentDate by remember { mutableStateOf(record.paymentDate ?: MonthUtils.todayDateString()) }
+    var selectedMethod by remember { mutableStateOf(record.paymentMethodEnum) }
+    var transactionId by remember { mutableStateOf(record.transactionId ?: "") }
     var note by remember { mutableStateOf(record.paymentNote ?: "") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var showReverseConfirm by remember { mutableStateOf(false) }
@@ -592,7 +696,7 @@ fun RecordPaymentDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 440.dp)
+                    .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -649,6 +753,29 @@ fun RecordPaymentDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    Text(strings.paymentMethodLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PaymentMethod.entries.forEach { method ->
+                            FilterChip(
+                                selected = selectedMethod == method,
+                                onClick = { selectedMethod = method },
+                                label = { Text(method.label) }
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = transactionId,
+                        onValueChange = { transactionId = it },
+                        label = { Text(strings.transactionIdLabel) },
+                        placeholder = { Text("e.g. EP-98451234") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
 
                 OutlinedTextField(
@@ -692,12 +819,14 @@ fun RecordPaymentDialog(
                         ) {
                             Column(modifier = Modifier.padding(8.dp)) {
                                 Text(
-                                    text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)})",
+                                    text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)}) [${log.paymentMethod}]",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = tsText + (log.actionNote?.let { " • $it" } ?: ""),
+                                    text = tsText +
+                                        (log.transactionId?.let { " • Tx: $it" } ?: "") +
+                                        (log.actionNote?.let { " • $it" } ?: ""),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -719,7 +848,14 @@ fun RecordPaymentDialog(
                             amt >= record.dueAmount -> InstallmentStatus.PAID
                             else -> InstallmentStatus.PARTIAL
                         }
-                        onSave(amt, finalStatus, paymentDate.trim(), note.trim().takeIf { it.isNotEmpty() })
+                        onSave(
+                            amt,
+                            finalStatus,
+                            paymentDate.trim(),
+                            selectedMethod,
+                            transactionId.trim().takeIf { it.isNotEmpty() },
+                            note.trim().takeIf { it.isNotEmpty() }
+                        )
                     }
                 },
                 colors = ButtonDefaults.buttonColors(
@@ -744,7 +880,9 @@ fun RecordPaymentDialog(
 fun MemberDetailDialog(
     strings: UiStrings,
     member: CommitteeMember,
+    monthlyShareContribution: Long = 5000L,
     installments: List<InstallmentRecord>,
+    turns: List<CommitteeTurn> = emptyList(),
     onDismiss: () -> Unit,
     onExportPdf: () -> Unit,
     onPrintPdf: (() -> Unit)? = null,
@@ -754,8 +892,15 @@ fun MemberDetailDialog(
     val memberInstallments = remember(installments, member.id) {
         installments.filter { it.memberId == member.id }.sortedBy { it.monthIndex }
     }
+    val memberTurns = remember(turns, member.id, member.name) {
+        turns.filter {
+            it.recipientMemberId == member.id ||
+                it.recipientName.trim().equals(member.name.trim(), ignoreCase = true)
+        }.sortedBy { it.turnNumber }
+    }
     val totalPaid = memberInstallments.sumOf { it.paidAmount }
     val totalDue = memberInstallments.sumOf { it.dueAmount }
+    val monthlyDue = member.monthlyDue(monthlyShareContribution)
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -763,7 +908,7 @@ fun MemberDetailDialog(
             Column {
                 Text("#${member.committeeNumber} • ${member.name}", fontWeight = FontWeight.Bold)
                 Text(
-                    text = "${member.phone} • ${strings.payoutMonth}: ${MonthUtils.formatMonthDisplay(member.payoutMonth)}",
+                    text = "${member.phone} • ${FormatUtils.formatShares(member.effectiveShares)} Share(s) (${FormatUtils.formatPkr(monthlyDue)}/mo)",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -773,7 +918,7 @@ fun MemberDetailDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
+                    .heightIn(max = 450.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -826,6 +971,42 @@ fun MemberDetailDialog(
                     }
                 }
 
+                if (memberTurns.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text(
+                        text = "${strings.navTurns} (${memberTurns.size})",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    memberTurns.forEach { t ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Turn #${t.turnNumber} • ${FormatUtils.formatPkr(t.payoutAmount)}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "${t.scheduledMonth} • Date: ${t.payoutDate?.takeIf { it.isNotBlank() } ?: "Unknown"}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                PayoutStatusBadge(t.statusEnum, strings)
+                            }
+                        }
+                    }
+                }
+
                 HorizontalDivider()
 
                 if (memberInstallments.isEmpty()) {
@@ -849,6 +1030,8 @@ fun MemberDetailDialog(
                                 )
                                 Text(
                                     text = "${FormatUtils.formatPkr(rec.paidAmount)} / ${FormatUtils.formatPkr(rec.dueAmount)}" +
+                                        (if (rec.paidAmount > 0L) " • ${rec.paymentMethodEnum.label}" else "") +
+                                        (rec.transactionId?.let { " ($it)" } ?: "") +
                                         (rec.paymentDate?.let { " • $it" } ?: ""),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -908,7 +1091,7 @@ fun CommitteeSwitcherDialog(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(committee.name, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "${committee.memberCount} Members • ${FormatUtils.formatPkr(committee.monthlyInstallment)}/mo",
+                                    text = "${committee.memberCount} Members • ${committee.effectiveTotalShares} Shares • ${FormatUtils.formatPkr(committee.monthlyCollectionTotal)}/mo",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -978,7 +1161,7 @@ fun RecordPayoutDialog(
                 OutlinedTextField(
                     value = dateText,
                     onValueChange = { dateText = it; errorMsg = null },
-                    label = { Text("${strings.paymentDate} (YYYY-MM-DD)") },
+                    label = { Text("${strings.paymentDate} (YYYY-MM-DD or Unknown)") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("payout_date_input")
                 )
@@ -997,8 +1180,7 @@ fun RecordPayoutDialog(
                     val amt = amountText.toLongOrNull()
                     when {
                         amt == null || amt <= 0L -> errorMsg = "Enter a valid payout amount"
-                        dateText.trim().isEmpty() -> errorMsg = "Enter payout date"
-                        else -> onConfirm(amt, dateText.trim())
+                        else -> onConfirm(amt, dateText.trim().ifEmpty { "Unknown" })
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = StatusPaidGreen),
@@ -1081,13 +1263,15 @@ fun PaymentActivityHistoryDialog(
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)})",
+                                            text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)}) [${log.paymentMethod}]",
                                             style = MaterialTheme.typography.labelMedium,
                                             color = MaterialTheme.colorScheme.primary,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                         Text(
-                                            text = tsText + (log.actionNote?.let { " • $it" } ?: ""),
+                                            text = tsText +
+                                                (log.transactionId?.let { " • Tx: $it" } ?: "") +
+                                                (log.actionNote?.let { " • $it" } ?: ""),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )

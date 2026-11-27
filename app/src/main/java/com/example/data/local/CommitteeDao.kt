@@ -31,8 +31,12 @@ interface CommitteeDao {
     @Query("DELETE FROM committees WHERE id = :committeeId")
     suspend fun deleteCommitteeById(committeeId: String)
 
+    // Members
     @Query("SELECT * FROM members WHERE committeeId = :committeeId ORDER BY committeeNumber ASC")
     fun observeMembers(committeeId: String): Flow<List<MemberEntity>>
+
+    @Query("SELECT * FROM members ORDER BY committeeNumber ASC")
+    fun observeAllMembers(): Flow<List<MemberEntity>>
 
     @Query("SELECT * FROM members WHERE committeeId = :committeeId ORDER BY committeeNumber ASC")
     suspend fun getMembersOnce(committeeId: String): List<MemberEntity>
@@ -55,11 +59,65 @@ interface CommitteeDao {
     @Query("SELECT COUNT(*) FROM members WHERE committeeId = :committeeId AND payoutStatus = 'PAID'")
     suspend fun countPaidPayoutsForCommittee(committeeId: String): Int
 
+    // Committee Turns (Individual payout slots, independent of member count)
+    @Query("SELECT * FROM committee_turns WHERE committeeId = :committeeId ORDER BY turnNumber ASC")
+    fun observeTurns(committeeId: String): Flow<List<CommitteeTurnEntity>>
+
+    @Query("SELECT * FROM committee_turns ORDER BY turnNumber ASC")
+    fun observeAllTurns(): Flow<List<CommitteeTurnEntity>>
+
+    @Query("SELECT * FROM committee_turns WHERE committeeId = :committeeId ORDER BY turnNumber ASC")
+    suspend fun getTurnsOnce(committeeId: String): List<CommitteeTurnEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTurn(turn: CommitteeTurnEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTurns(turns: List<CommitteeTurnEntity>)
+
+    @Update
+    suspend fun updateTurn(turn: CommitteeTurnEntity)
+
+    @Query("DELETE FROM committee_turns WHERE id = :turnId")
+    suspend fun deleteTurnById(turnId: String)
+
+    @Query("SELECT COUNT(*) FROM committee_turns WHERE committeeId = :committeeId AND status = 'PAID'")
+    suspend fun countPaidTurnsForCommittee(committeeId: String): Int
+
+    // Old Committee Records / History (Isolated historical archive)
+    @Query("SELECT * FROM old_committee_records ORDER BY createdAtMillis DESC")
+    fun observeOldRecords(): Flow<List<OldCommitteeRecordEntity>>
+
+    @Query("SELECT * FROM old_committee_records ORDER BY createdAtMillis DESC")
+    suspend fun getAllOldRecordsOnce(): List<OldCommitteeRecordEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOldRecord(record: OldCommitteeRecordEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOldRecords(records: List<OldCommitteeRecordEntity>)
+
+    @Update
+    suspend fun updateOldRecord(record: OldCommitteeRecordEntity)
+
+    @Query("DELETE FROM old_committee_records WHERE id = :recordId")
+    suspend fun deleteOldRecordById(recordId: String)
+
+    // Installments / Payments
     @Query("SELECT * FROM installments WHERE committeeId = :committeeId ORDER BY monthIndex ASC, committeeNumber ASC")
     fun observeInstallments(committeeId: String): Flow<List<InstallmentEntity>>
 
+    @Query("SELECT * FROM installments ORDER BY monthIndex ASC, committeeNumber ASC")
+    fun observeAllInstallments(): Flow<List<InstallmentEntity>>
+
     @Query("SELECT * FROM installments WHERE committeeId = :committeeId ORDER BY monthIndex ASC, committeeNumber ASC")
     suspend fun getInstallmentsOnce(committeeId: String): List<InstallmentEntity>
+
+    @Query("SELECT * FROM installments WHERE committeeId = :committeeId AND memberId = :memberId AND monthKey = :monthKey LIMIT 1")
+    suspend fun findInstallmentOnce(committeeId: String, memberId: String, monthKey: String): InstallmentEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInstallment(installment: InstallmentEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertInstallments(installments: List<InstallmentEntity>)

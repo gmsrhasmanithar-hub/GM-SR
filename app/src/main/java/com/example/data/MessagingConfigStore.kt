@@ -5,9 +5,11 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.i18n.AppLanguage
+import com.example.model.AppCompanySettings
 import com.example.model.ReminderStage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -46,6 +48,22 @@ class MessagingConfigStore(private val context: Context) {
         val CURRENT_USER_ID = stringPreferencesKey("current_user_id")
         val IS_LOGGED_OUT = booleanPreferencesKey("is_logged_out")
         val SYNC_WEBHOOK_URL = stringPreferencesKey("sync_webhook_url")
+
+        // Company, Easypaisa, Committee Defaults, Application Settings
+        val COMPANY_NAME = stringPreferencesKey("company_name")
+        val APPLICATION_NAME = stringPreferencesKey("application_name")
+        val ADMIN_NAME = stringPreferencesKey("admin_name")
+        val ADMIN_CONTACT = stringPreferencesKey("admin_contact")
+        val EASYPAISA_NUMBER = stringPreferencesKey("easypaisa_number")
+        val EASYPAISA_HOLDER = stringPreferencesKey("easypaisa_holder")
+        val CURRENCY = stringPreferencesKey("currency")
+        val DEFAULT_CONTRIBUTION = longPreferencesKey("default_monthly_contribution")
+        val DEFAULT_SHARES = longPreferencesKey("default_total_shares")
+        val DEFAULT_START_DAY = longPreferencesKey("default_collection_start_day")
+        val DEFAULT_END_DAY = longPreferencesKey("default_collection_end_day")
+        val DEFAULT_DURATION_MONTHS = longPreferencesKey("default_duration_months")
+        val PDF_FOOTER_NOTE = stringPreferencesKey("pdf_footer_note")
+
         fun templateKey(stage: ReminderStage, lang: AppLanguage) =
             stringPreferencesKey("tpl_${stage.name}_${lang.code}")
     }
@@ -71,6 +89,24 @@ class MessagingConfigStore(private val context: Context) {
             smsSenderId = prefs[Keys.SMS_SENDER_ID] ?: "GM HASMANI",
             localLanguageCode = prefs[Keys.LANGUAGE] ?: "en",
             syncWebhookUrl = prefs[Keys.SYNC_WEBHOOK_URL] ?: ""
+        )
+    }
+
+    val companySettingsFlow: Flow<AppCompanySettings> = context.messagingDataStore.data.map { prefs ->
+        AppCompanySettings(
+            companyName = prefs[Keys.COMPANY_NAME] ?: "GM HASMANI COMMITTEE",
+            applicationName = prefs[Keys.APPLICATION_NAME] ?: "GM Hasmani Committee Manager",
+            adminName = prefs[Keys.ADMIN_NAME] ?: "GM Hasmani Admin",
+            adminContactNumber = prefs[Keys.ADMIN_CONTACT] ?: "",
+            easypaisaNumber = prefs[Keys.EASYPAISA_NUMBER]?.takeIf { it.isNotBlank() } ?: "03423498631",
+            easypaisaAccountHolder = prefs[Keys.EASYPAISA_HOLDER]?.takeIf { it.isNotBlank() } ?: "GM Hasmani Admin",
+            currency = prefs[Keys.CURRENCY]?.takeIf { it.isNotBlank() } ?: "PKR",
+            defaultMonthlyContribution = prefs[Keys.DEFAULT_CONTRIBUTION] ?: 5000L,
+            defaultTotalShares = prefs[Keys.DEFAULT_SHARES] ?: 10L,
+            defaultCollectionStartDay = prefs[Keys.DEFAULT_START_DAY] ?: 28L,
+            defaultCollectionEndDay = prefs[Keys.DEFAULT_END_DAY] ?: 8L,
+            defaultDurationMonths = prefs[Keys.DEFAULT_DURATION_MONTHS] ?: 10L,
+            pdfFooterNote = prefs[Keys.PDF_FOOTER_NOTE] ?: "Official GM HASMANI Committee Record"
         )
     }
 
@@ -110,6 +146,24 @@ class MessagingConfigStore(private val context: Context) {
     suspend fun saveSyncWebhookUrl(url: String) {
         context.messagingDataStore.edit { prefs ->
             prefs[Keys.SYNC_WEBHOOK_URL] = url.trim()
+        }
+    }
+
+    suspend fun saveCompanySettings(settings: AppCompanySettings) {
+        context.messagingDataStore.edit { prefs ->
+            prefs[Keys.COMPANY_NAME] = settings.companyName.trim().ifEmpty { "GM HASMANI COMMITTEE" }
+            prefs[Keys.APPLICATION_NAME] = settings.applicationName.trim().ifEmpty { "GM Hasmani Committee Manager" }
+            prefs[Keys.ADMIN_NAME] = settings.adminName.trim().ifEmpty { "GM Hasmani Admin" }
+            prefs[Keys.ADMIN_CONTACT] = settings.adminContactNumber.trim()
+            prefs[Keys.EASYPAISA_NUMBER] = settings.easypaisaNumber.trim().ifEmpty { "03423498631" }
+            prefs[Keys.EASYPAISA_HOLDER] = settings.easypaisaAccountHolder.trim().ifEmpty { "GM Hasmani Admin" }
+            prefs[Keys.CURRENCY] = settings.currency.trim().ifEmpty { "PKR" }
+            prefs[Keys.DEFAULT_CONTRIBUTION] = settings.defaultMonthlyContribution.coerceIn(100L, 10_000_000L)
+            prefs[Keys.DEFAULT_SHARES] = settings.defaultTotalShares.coerceIn(2L, 500L)
+            prefs[Keys.DEFAULT_START_DAY] = settings.defaultCollectionStartDay.coerceIn(1L, 31L)
+            prefs[Keys.DEFAULT_END_DAY] = settings.defaultCollectionEndDay.coerceIn(1L, 31L)
+            prefs[Keys.DEFAULT_DURATION_MONTHS] = settings.defaultDurationMonths.coerceIn(2L, 200L)
+            prefs[Keys.PDF_FOOTER_NOTE] = settings.pdfFooterNote.trim().ifEmpty { "Official GM HASMANI Committee Record" }
         }
     }
 

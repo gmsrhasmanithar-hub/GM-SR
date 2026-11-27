@@ -5,6 +5,7 @@ import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import kotlin.math.roundToLong
 
 enum class CommitteeStatus {
     ACTIVE, COMPLETED, ARCHIVED;
@@ -45,6 +46,18 @@ enum class InstallmentStatus {
             paidAmount >= dueAmount -> PAID
             else -> PARTIAL
         }
+    }
+}
+
+enum class PaymentMethod(val label: String) {
+    CASH("Cash"),
+    EASYPAISA("Easypaisa"),
+    BANK_TRANSFER("Bank Transfer"),
+    OTHER("Other");
+
+    companion object {
+        fun fromRaw(raw: String?): PaymentMethod =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) || it.label.equals(raw, ignoreCase = true) } ?: CASH
     }
 }
 
@@ -177,10 +190,27 @@ object PasswordHasher {
     }
 }
 
+data class AppCompanySettings(
+    val companyName: String = "GM HASMANI COMMITTEE",
+    val applicationName: String = "GM Hasmani Committee Manager",
+    val adminName: String = "GM Hasmani Admin",
+    val adminContactNumber: String = "",
+    val easypaisaNumber: String = "03423498631",
+    val easypaisaAccountHolder: String = "GM Hasmani Admin",
+    val currency: String = "PKR",
+    val defaultMonthlyContribution: Long = 5000L,
+    val defaultTotalShares: Long = 10L,
+    val defaultCollectionStartDay: Long = 28L,
+    val defaultCollectionEndDay: Long = 8L,
+    val defaultDurationMonths: Long = 10L,
+    val pdfFooterNote: String = "Official GM HASMANI Committee Record"
+)
+
 data class Committee(
     val id: String = "",
     val name: String = "",
     val memberCount: Long = 10L,
+    val totalShares: Long = 0L,
     val monthlyInstallment: Long = 5000L,
     val totalMonths: Long = 10L,
     val collectionDayStart: Long = 28L,
@@ -194,7 +224,8 @@ data class Committee(
     val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     val statusEnum: CommitteeStatus get() = CommitteeStatus.fromRaw(status)
-    val monthlyCollectionTotal: Long get() = memberCount * monthlyInstallment
+    val effectiveTotalShares: Long get() = if (totalShares > 0L) totalShares else memberCount
+    val monthlyCollectionTotal: Long get() = effectiveTotalShares * monthlyInstallment
     val totalCommitteeAmount: Long get() = monthlyCollectionTotal * totalMonths
     val eachPayoutAmount: Long get() = monthlyCollectionTotal
 }
@@ -205,6 +236,7 @@ data class CommitteeMember(
     val name: String = "",
     val phone: String = "",
     val committeeNumber: Long = 1L,
+    val shares: Double = 1.0,
     val payoutMonth: String = MonthUtils.currentMonthKey(),
     val payoutStatus: String = PayoutStatus.PENDING.name,
     val payoutDate: String? = null,
@@ -215,7 +247,50 @@ data class CommitteeMember(
 ) {
     val payoutStatusEnum: PayoutStatus get() = PayoutStatus.fromRaw(payoutStatus)
     val memberStatusEnum: MemberStatus get() = MemberStatus.fromRaw(status)
+    val effectiveShares: Double get() = if (shares > 0.0) shares else 1.0
+
+    fun monthlyDue(shareContribution: Long): Long =
+        (effectiveShares * shareContribution.toDouble()).roundToLong().coerceAtLeast(0L)
 }
+
+data class CommitteeTurn(
+    val id: String = "",
+    val committeeId: String = "",
+    val turnNumber: Long = 1L,
+    val recipientMemberId: String? = null,
+    val recipientName: String = "",
+    val recipientPhone: String? = null,
+    val payoutAmount: Long = 50000L,
+    val scheduledMonth: String = MonthUtils.currentMonthKey(),
+    val payoutDate: String? = null,
+    val status: String = PayoutStatus.PENDING.name,
+    val confirmedByAdmin: Boolean = false,
+    val notes: String? = null,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+) {
+    val statusEnum: PayoutStatus get() = PayoutStatus.fromRaw(status)
+}
+
+data class OldCommitteeRecord(
+    val id: String = "",
+    val committeeNumber: String = "",
+    val committeeName: String = "",
+    val startDate: String = "",
+    val endDate: String = "",
+    val memberNames: String = "",
+    val contactNumbers: String = "",
+    val numberOfShares: String = "",
+    val monthlyContributions: String = "",
+    val totalCollection: String = "",
+    val paymentHistory: String = "",
+    val payoutRecipient: String = "",
+    val payoutAmount: String = "",
+    val payoutDate: String = "",
+    val status: String = CommitteeStatus.COMPLETED.name,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
 
 data class InstallmentRecord(
     val id: String = "",
@@ -231,10 +306,13 @@ data class InstallmentRecord(
     val status: String = InstallmentStatus.UNPAID.name,
     val paymentDate: String? = null,
     val paymentNote: String? = null,
+    val paymentMethod: String = PaymentMethod.CASH.name,
+    val transactionId: String? = null,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     val statusEnum: InstallmentStatus get() = InstallmentStatus.fromRaw(status)
+    val paymentMethodEnum: PaymentMethod get() = PaymentMethod.fromRaw(paymentMethod)
     val remainingAmount: Long get() = (dueAmount - paidAmount).coerceAtLeast(0L)
 }
 
@@ -249,6 +327,8 @@ data class PaymentHistoryLog(
     val newPaidAmount: Long = 0L,
     val previousStatus: String = InstallmentStatus.UNPAID.name,
     val newStatus: String = InstallmentStatus.PAID.name,
+    val paymentMethod: String? = null,
+    val transactionId: String? = null,
     val actionNote: String? = null,
     val createdAtMillis: Long = System.currentTimeMillis()
 )
@@ -277,8 +357,11 @@ data class MonthlyChartPoint(
 
 data class DashboardSummary(
     val totalActiveCommittees: Int = 1,
+    val totalCompletedCommittees: Int = 0,
     val activeMemberCount: Int,
     val targetMemberCount: Int,
+    val totalSharesConfigured: Long = 10L,
+    val totalMemberShares: Double = 0.0,
     val monthlyCollectionTarget: Long,
     val currentMonthCollected: Long,
     val currentMonthPending: Long,
@@ -291,8 +374,12 @@ data class DashboardSummary(
     val currentMonthIndex: Int,
     val totalMonths: Int,
     val nextPayoutMember: CommitteeMember?,
+    val nextPayoutTurn: CommitteeTurn? = null,
+    val nextPayoutAmount: Long = 0L,
     val upcomingPayoutDate: String,
+    val nextPaymentDueDate: String = "",
     val completedPayouts: Int,
+    val totalPayoutsAmount: Long = 0L,
     val remainingMonths: Int,
     val monthlyChartPoints: List<MonthlyChartPoint>
 )
@@ -300,6 +387,7 @@ data class DashboardSummary(
 object MonthUtils {
     private val keyFormat = SimpleDateFormat("yyyy-MM", Locale.US)
     private val displayFormat = SimpleDateFormat("MMM yyyy", Locale.US)
+    private val fullMonthFormat = SimpleDateFormat("MMMM yyyy", Locale.US)
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 
     fun currentMonthKey(): String = keyFormat.format(Calendar.getInstance().time)
@@ -336,9 +424,31 @@ object MonthUtils {
         return displayFormat.format(cal.time)
     }
 
+    fun formatMonthFullDisplay(monthKey: String): String {
+        val parts = monthKey.split("-")
+        if (parts.size != 2) return monthKey
+        val year = parts[0].toIntOrNull() ?: return monthKey
+        val month = (parts[1].toIntOrNull() ?: 1) - 1
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.YEAR, year)
+        cal.set(Calendar.MONTH, month)
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        return fullMonthFormat.format(cal.time)
+    }
+
     fun formatCollectionWindow(monthKey: String, startDay: Long, endDay: Long): String {
         val nextMonth = addMonths(monthKey, 1)
-        return "${startDay}th ${formatMonthDisplay(monthKey).take(3)} – ${endDay}th ${formatMonthDisplay(nextMonth).take(3)}"
+        return "$startDay ${formatMonthDisplay(monthKey)} – $endDay ${formatMonthDisplay(nextMonth)}"
+    }
+
+    fun formatCollectionWindowFull(monthKey: String, startDay: Long, endDay: Long): String {
+        val nextMonth = addMonths(monthKey, 1)
+        return "$startDay ${formatMonthFullDisplay(monthKey)} to $endDay ${formatMonthFullDisplay(nextMonth)}"
+    }
+
+    fun formatDueDate(monthKey: String, startDay: Long, endDay: Long): String {
+        val targetMonth = if (endDay < startDay) addMonths(monthKey, 1) else monthKey
+        return "$endDay ${formatMonthDisplay(targetMonth)}"
     }
 
     fun formatPayoutDate(monthKey: String, payoutDay: Long, startDay: Long): String {
@@ -367,8 +477,24 @@ object PhoneUtils {
 object FormatUtils {
     private val numberFormat = NumberFormat.getNumberInstance(Locale.US)
 
+    fun formatMoney(amount: Long, currency: String = "PKR"): String =
+        if (currency.equals("Rs.", ignoreCase = true) || currency.equals("Rs", ignoreCase = true)) {
+            "Rs. ${numberFormat.format(amount)}"
+        } else {
+            "$currency ${numberFormat.format(amount)}"
+        }
+
     fun formatPkr(amount: Long): String = "PKR ${numberFormat.format(amount)}"
     fun formatCompactNumber(amount: Long): String = numberFormat.format(amount)
+
+    fun formatShares(shares: Double): String {
+        val rounded = shares.roundToLong().toDouble()
+        return if (kotlin.math.abs(shares - rounded) < 0.001) {
+            rounded.toLong().toString()
+        } else {
+            String.format(Locale.US, "%.1f", shares)
+        }
+    }
 }
 
 enum class DuplicateConflictType {
@@ -389,7 +515,7 @@ object CommitteeUtils {
     fun filterUnpaidForReminders(
         members: List<CommitteeMember>,
         monthInstallments: List<InstallmentRecord>,
-        fallbackMonthlyInstallment: Long
+        fallbackMonthlyShareAmount: Long
     ): ReminderEligibility {
         val activeSorted = members
             .filter { it.memberStatusEnum == MemberStatus.ACTIVE }
@@ -402,7 +528,8 @@ object CommitteeUtils {
             if (rec?.statusEnum == InstallmentStatus.PAID) {
                 excluded.add(member)
             } else {
-                val due = rec?.remainingAmount?.takeIf { it > 0L } ?: fallbackMonthlyInstallment
+                val due = rec?.remainingAmount?.takeIf { it > 0L }
+                    ?: member.monthlyDue(fallbackMonthlyShareAmount)
                 eligible.add(member to due)
             }
         }
@@ -433,10 +560,109 @@ object CommitteeUtils {
     }
 }
 
+object OldHistoryCsvUtils {
+    fun parseCsvToRecords(csvText: String): List<OldCommitteeRecord> {
+        val lines = csvText.lines().map { it.trimEnd() }.filter { it.isNotBlank() }
+        if (lines.isEmpty()) return emptyList()
+
+        val firstCols = parseCsvLine(lines.first()).map { it.trim().lowercase() }
+        val hasHeader = firstCols.any {
+            it.contains("committee") || it.contains("name") || it.contains("recipient") || it.contains("payout")
+        }
+        val dataLines = if (hasHeader) lines.drop(1) else lines
+
+        return dataLines.mapIndexedNotNull { idx, line ->
+            val cols = parseCsvLine(line)
+            if (cols.all { it.isBlank() }) return@mapIndexedNotNull null
+            fun col(i: Int): String = cols.getOrNull(i)?.trim().orEmpty()
+            val cNum = col(0).ifBlank { "Old #${idx + 1}" }
+            val cName = col(1).ifBlank { "Historical Committee $cNum" }
+            val statusRaw = col(13).uppercase()
+            val cleanStatus = when {
+                statusRaw.contains("PENDING") -> CommitteeStatus.ACTIVE.name
+                statusRaw.contains("ARCHIVE") -> CommitteeStatus.ARCHIVED.name
+                else -> CommitteeStatus.COMPLETED.name
+            }
+            OldCommitteeRecord(
+                committeeNumber = cNum,
+                committeeName = cName,
+                startDate = col(2),
+                endDate = col(3),
+                memberNames = col(4),
+                contactNumbers = col(5),
+                numberOfShares = col(6),
+                monthlyContributions = col(7),
+                totalCollection = col(8),
+                paymentHistory = col(9),
+                payoutRecipient = col(10),
+                payoutAmount = col(11),
+                payoutDate = col(12),
+                status = cleanStatus
+            )
+        }
+    }
+
+    fun exportToCsv(records: List<OldCommitteeRecord>): String {
+        val sb = StringBuilder()
+        sb.appendLine(
+            "Committee Number,Committee Name,Start Date,End Date,Member Names,Contact Numbers," +
+                "Number of Shares,Monthly Contributions,Total Collection,Payment History," +
+                "Payout Recipient,Payout Amount,Payout Date,Status"
+        )
+        fun esc(v: String): String {
+            val cleaned = v.replace("\r", " ").replace("\n", "; ")
+            return if (cleaned.contains(",") || cleaned.contains("\"")) {
+                "\"${cleaned.replace("\"", "\"\"")}\""
+            } else cleaned
+        }
+        records.forEach { r ->
+            sb.appendLine(
+                listOf(
+                    r.committeeNumber, r.committeeName, r.startDate, r.endDate,
+                    r.memberNames, r.contactNumbers, r.numberOfShares,
+                    r.monthlyContributions, r.totalCollection, r.paymentHistory,
+                    r.payoutRecipient, r.payoutAmount, r.payoutDate, r.status
+                ).joinToString(",") { esc(it) }
+            )
+        }
+        return sb.toString()
+    }
+
+    fun parseCsvLine(line: String): List<String> {
+        val result = mutableListOf<String>()
+        val current = StringBuilder()
+        var inQuotes = false
+        var i = 0
+        while (i < line.length) {
+            val ch = line[i]
+            when {
+                ch == '"' -> {
+                    if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
+                        current.append('"')
+                        i++
+                    } else {
+                        inQuotes = !inQuotes
+                    }
+                }
+                ch == ',' && !inQuotes -> {
+                    result.add(current.toString())
+                    current.clear()
+                }
+                else -> current.append(ch)
+            }
+            i++
+        }
+        result.add(current.toString())
+        return result
+    }
+}
+
 data class BackupPreview(
     val committeeCount: Int,
     val memberCount: Int,
     val installmentCount: Int,
+    val turnCount: Int = 0,
+    val oldRecordCount: Int = 0,
     val exportedAt: String
 )
 
@@ -447,16 +673,21 @@ object BackupUtils {
             val committees = root.getJSONArray("committees")
             var members = 0
             var installments = 0
+            var turns = 0
             for (i in 0 until committees.length()) {
                 val c = committees.getJSONObject(i)
                 members += c.optJSONArray("members")?.length() ?: 0
                 installments += c.optJSONArray("installments")?.length() ?: 0
+                turns += c.optJSONArray("turns")?.length() ?: 0
             }
+            val oldCount = root.optJSONArray("oldCommitteeRecords")?.length() ?: 0
             Result.success(
                 BackupPreview(
                     committeeCount = committees.length(),
                     memberCount = members,
                     installmentCount = installments,
+                    turnCount = turns,
+                    oldRecordCount = oldCount,
                     exportedAt = root.optString("exportedAt", "")
                 )
             )

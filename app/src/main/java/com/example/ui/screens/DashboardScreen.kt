@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ListAlt
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -30,6 +31,8 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.PendingActions
 import androidx.compose.material.icons.rounded.PersonAdd
+import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Sms
@@ -47,6 +50,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,24 +65,38 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.i18n.UiStrings
+import com.example.model.AppCompanySettings
 import com.example.model.Committee
+import com.example.model.CommitteeMember
+import com.example.model.CommitteeTurn
 import com.example.model.DashboardSummary
 import com.example.model.FormatUtils
+import com.example.model.InstallmentRecord
+import com.example.model.InstallmentStatus
 import com.example.model.MonthUtils
+import com.example.model.PayoutStatus
 import com.example.ui.components.CommitteeStatusBadge
 import com.example.ui.components.EmptyCommitteePrompt
 import com.example.ui.components.KpiMetricCard
 import com.example.ui.components.MonthSelectorBar
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.GoldAccent
+import com.example.ui.theme.StatusPaidBg
 import com.example.ui.theme.StatusPaidGreen
+import com.example.ui.theme.StatusPendingBg
+import com.example.ui.theme.StatusPendingYellow
+import com.example.ui.theme.StatusUnpaidBg
 import com.example.ui.theme.StatusUnpaidRed
 
 @Composable
 fun DashboardScreen(
     strings: UiStrings,
+    companySettings: AppCompanySettings,
     committee: Committee?,
     summary: DashboardSummary?,
+    members: List<CommitteeMember>,
+    installments: List<InstallmentRecord>,
+    turns: List<CommitteeTurn>,
     selectedMonthKey: String,
     onSelectMonth: (String) -> Unit,
     onOpenCommitteeSwitcher: () -> Unit,
@@ -88,7 +106,9 @@ fun DashboardScreen(
     onDeleteCommittee: (Committee) -> Unit,
     onQuickAddMember: () -> Unit,
     onGoToInstallments: () -> Unit,
+    onGoToTurns: () -> Unit,
     onGoToReminders: () -> Unit,
+    onGoToReports: () -> Unit,
     onPrintSummary: () -> Unit,
     onDownloadSummary: () -> Unit,
     onOpenAuditHistory: () -> Unit,
@@ -104,16 +124,45 @@ fun DashboardScreen(
         return
     }
 
+    val currency = companySettings.currency
     val progressRatio = if (summary.monthlyCollectionTarget > 0L) {
         (summary.currentMonthCollected.toFloat() / summary.monthlyCollectionTarget.toFloat()).coerceIn(0f, 1f)
     } else 0f
+
+    val monthInstallments = remember(installments, selectedMonthKey) {
+        installments.filter { it.monthKey == selectedMonthKey }.sortedBy { it.committeeNumber }
+    }
+    val paidMonthList = remember(monthInstallments) {
+        monthInstallments.filter { it.statusEnum == InstallmentStatus.PAID }
+    }
+    val unpaidMonthList = remember(monthInstallments) {
+        monthInstallments.filter { it.statusEnum != InstallmentStatus.PAID }
+    }
+    val paidRecipients = remember(turns, members) {
+        if (turns.isNotEmpty()) {
+            turns.filter { it.statusEnum == PayoutStatus.PAID }.sortedBy { it.turnNumber }
+                .map { "Turn #${it.turnNumber}: ${it.recipientName} (${FormatUtils.formatMoney(it.payoutAmount, currency)})" }
+        } else {
+            members.filter { it.payoutStatusEnum == PayoutStatus.PAID }.sortedBy { it.committeeNumber }
+                .map { "#${it.committeeNumber}: ${it.name}" }
+        }
+    }
+    val nextInLineRecipients = remember(turns, members) {
+        if (turns.isNotEmpty()) {
+            turns.filter { it.statusEnum == PayoutStatus.PENDING }.sortedBy { it.turnNumber }
+                .map { "Turn #${it.turnNumber}: ${it.recipientName} (${MonthUtils.formatMonthDisplay(it.scheduledMonth)})" }
+        } else {
+            members.filter { it.payoutStatusEnum == PayoutStatus.PENDING }.sortedBy { it.committeeNumber }
+                .map { "#${it.committeeNumber}: ${it.name}" }
+        }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Simple Brand & Active Committee Card
+        // Brand & Active Committee Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -123,7 +172,7 @@ fun DashboardScreen(
                 Box(modifier = Modifier.fillMaxWidth()) {
                     Image(
                         painter = painterResource(id = R.drawable.img_gm_hero_banner),
-                        contentDescription = "GM HASMANI THAR Banner",
+                        contentDescription = "${companySettings.companyName} Banner",
                         modifier = Modifier
                             .matchParentSize()
                             .clip(RoundedCornerShape(22.dp)),
@@ -170,7 +219,7 @@ fun DashboardScreen(
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Text(
-                                        text = strings.brandName,
+                                        text = companySettings.companyName,
                                         color = Color.White,
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.Bold,
@@ -198,7 +247,7 @@ fun DashboardScreen(
                         )
 
                         Text(
-                            text = "${committee.memberCount} Members • ${FormatUtils.formatPkr(committee.monthlyInstallment)}/mo • ${committee.totalMonths} Months",
+                            text = "${committee.memberCount} Members • ${committee.effectiveTotalShares} Shares • ${FormatUtils.formatMoney(committee.monthlyInstallment, currency)}/share • ${committee.totalMonths} Months",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.9f)
                         )
@@ -214,7 +263,7 @@ fun DashboardScreen(
                                     color = Color.White.copy(alpha = 0.8f)
                                 )
                                 Text(
-                                    text = FormatUtils.formatPkr(committee.monthlyCollectionTotal),
+                                    text = FormatUtils.formatMoney(committee.monthlyCollectionTotal, currency),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
@@ -227,7 +276,7 @@ fun DashboardScreen(
                                     color = Color.White.copy(alpha = 0.8f)
                                 )
                                 Text(
-                                    text = FormatUtils.formatPkr(committee.totalCommitteeAmount),
+                                    text = FormatUtils.formatMoney(committee.totalCommitteeAmount, currency),
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = GoldAccent
@@ -235,7 +284,6 @@ fun DashboardScreen(
                             }
                         }
 
-                        // Action row on committee card: View, Edit, Delete
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -304,7 +352,7 @@ fun DashboardScreen(
             )
         }
 
-        // Clean 2x2 Summary KPIs
+        // 3x2 Summary KPIs covering every requested metric
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
@@ -312,19 +360,19 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     KpiMetricCard(
-                        title = strings.activeMembers,
-                        value = "${summary.activeMemberCount} / ${summary.targetMemberCount}",
-                        subtitle = "${strings.totalActiveCommittees}: ${summary.totalActiveCommittees}",
-                        icon = Icons.Rounded.Group,
+                        title = strings.totalActiveCommittees,
+                        value = "${summary.totalActiveCommittees} Active",
+                        subtitle = "${strings.completedCommitteesLabel}: ${summary.totalCompletedCommittees}",
+                        icon = Icons.Rounded.PieChart,
                         accentColor = EmeraldPrimary,
                         modifier = Modifier.weight(1f)
                     )
                     KpiMetricCard(
-                        title = strings.nextPayoutMember,
-                        value = summary.nextPayoutMember?.let { "#${it.committeeNumber} ${it.name}" } ?: strings.completedLabel,
-                        subtitle = summary.upcomingPayoutDate,
-                        icon = Icons.Rounded.EventAvailable,
-                        accentColor = GoldAccent,
+                        title = "${strings.activeMembers} & ${strings.totalSharesLabel}",
+                        value = "${summary.activeMemberCount} / ${summary.targetMemberCount}",
+                        subtitle = "${FormatUtils.formatShares(summary.totalMemberShares)} / ${summary.totalSharesConfigured} Shares",
+                        icon = Icons.Rounded.Group,
+                        accentColor = EmeraldPrimary,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -335,25 +383,50 @@ fun DashboardScreen(
                 ) {
                     KpiMetricCard(
                         title = strings.totalCollected,
-                        value = FormatUtils.formatPkr(summary.currentMonthCollected),
-                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount}",
+                        value = FormatUtils.formatMoney(summary.currentMonthCollected, currency),
+                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} • Target: ${FormatUtils.formatCompactNumber(summary.monthlyCollectionTarget)}",
                         icon = Icons.Rounded.CheckCircle,
                         accentColor = StatusPaidGreen,
                         modifier = Modifier.weight(1f)
                     )
                     KpiMetricCard(
                         title = strings.totalPending,
-                        value = FormatUtils.formatPkr(summary.currentMonthPending),
+                        value = FormatUtils.formatMoney(summary.currentMonthPending, currency),
                         subtitle = "${strings.unpaidMembers}: ${summary.unpaidMembersCount} • ${strings.partialLabel}: ${summary.partialMembersCount}",
                         icon = Icons.Rounded.PendingActions,
                         accentColor = if (summary.currentMonthPending == 0L) StatusPaidGreen else StatusUnpaidRed,
                         modifier = Modifier.weight(1f)
                     )
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val nextLabel = summary.nextPayoutTurn?.let { "Turn #${it.turnNumber}: ${it.recipientName}" }
+                        ?: summary.nextPayoutMember?.let { "#${it.committeeNumber} ${it.name}" }
+                        ?: strings.completedLabel
+                    KpiMetricCard(
+                        title = strings.nextPayoutMember,
+                        value = nextLabel,
+                        subtitle = "${FormatUtils.formatMoney(summary.nextPayoutAmount, currency)} • ${strings.nextDueDateLabel}: ${summary.nextPaymentDueDate}",
+                        icon = Icons.Rounded.EventAvailable,
+                        accentColor = GoldAccent,
+                        modifier = Modifier.weight(1f)
+                    )
+                    KpiMetricCard(
+                        title = strings.totalPayoutsLabel,
+                        value = FormatUtils.formatMoney(summary.totalPayoutsAmount, currency),
+                        subtitle = "${strings.completedPayouts}: ${summary.completedPayouts}/${summary.totalMonths} • Left: ${summary.remainingMonths}m",
+                        icon = Icons.Rounded.AccountBalanceWallet,
+                        accentColor = EmeraldPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
 
-        // Simple Monthly Progress Bar
+        // Monthly Progress Bar
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -390,7 +463,7 @@ fun DashboardScreen(
                         trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                     Text(
-                        text = "${FormatUtils.formatPkr(summary.currentMonthCollected)} / ${FormatUtils.formatPkr(summary.monthlyCollectionTarget)} • ${strings.completedPayouts}: ${summary.completedPayouts}/${summary.totalMonths}",
+                        text = "${FormatUtils.formatMoney(summary.currentMonthCollected, currency)} / ${FormatUtils.formatMoney(summary.monthlyCollectionTarget, currency)} • ${summary.upcomingPayoutDate}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -398,7 +471,34 @@ fun DashboardScreen(
             }
         }
 
-        // Large Simple Action Buttons for Android Phone
+        // Live Paid / Unpaid & Recipients / Next-in-Line Summaries
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                DashboardMiniListCard(
+                    title = "${strings.paidMembers} (${paidMonthList.size})",
+                    items = paidMonthList.map { "#${it.committeeNumber} ${it.memberName} — ${FormatUtils.formatMoney(it.paidAmount, currency)}" },
+                    emptyText = "No paid installments recorded yet for this month.",
+                    badgeColor = StatusPaidGreen,
+                    badgeBg = StatusPaidBg
+                )
+                DashboardMiniListCard(
+                    title = "${strings.unpaidMembers} / ${strings.partialLabel} (${unpaidMonthList.size})",
+                    items = unpaidMonthList.map { "#${it.committeeNumber} ${it.memberName} — Due ${FormatUtils.formatMoney(it.remainingAmount, currency)}" },
+                    emptyText = "All members have paid for this month.",
+                    badgeColor = StatusUnpaidRed,
+                    badgeBg = StatusUnpaidBg
+                )
+                DashboardMiniListCard(
+                    title = "Committee Recipients (${paidRecipients.size} Paid • ${nextInLineRecipients.size} Next in Line)",
+                    items = paidRecipients.map { "✓ $it" } + nextInLineRecipients.map { "→ Next: $it" },
+                    emptyText = "No committee turns configured yet.",
+                    badgeColor = StatusPendingYellow,
+                    badgeBg = StatusPendingBg
+                )
+            }
+        }
+
+        // Quick Action Buttons
         item {
             Text(
                 text = strings.quickActions,
@@ -438,11 +538,30 @@ fun DashboardScreen(
                         modifier = Modifier.weight(1f).testTag("quick_payments_btn")
                     )
                     DashboardActionButton(
-                        label = strings.navReminders,
+                        label = strings.navTurns,
+                        icon = Icons.AutoMirrored.Rounded.ListAlt,
+                        tonal = true,
+                        onClick = onGoToTurns,
+                        modifier = Modifier.weight(1f).testTag("quick_turns_btn")
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    DashboardActionButton(
+                        label = strings.navMessageRequests,
                         icon = Icons.Rounded.Sms,
                         tonal = true,
                         onClick = onGoToReminders,
                         modifier = Modifier.weight(1f).testTag("quick_reminders_btn")
+                    )
+                    DashboardActionButton(
+                        label = strings.navPdfReports,
+                        icon = Icons.Rounded.PictureAsPdf,
+                        tonal = true,
+                        onClick = onGoToReports,
+                        modifier = Modifier.weight(1f).testTag("quick_reports_btn")
                     )
                 }
                 Row(
@@ -477,6 +596,58 @@ fun DashboardScreen(
                         icon = Icons.Rounded.Refresh,
                         onClick = onRefresh,
                         modifier = Modifier.weight(1f).testTag("dashboard_refresh_btn")
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardMiniListCard(
+    title: String,
+    items: List<String>,
+    emptyText: String,
+    badgeColor: Color,
+    badgeBg: Color
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Surface(color = badgeBg, shape = RoundedCornerShape(8.dp)) {
+                Text(
+                    text = title,
+                    color = badgeColor,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                )
+            }
+            if (items.isEmpty()) {
+                Text(
+                    text = emptyText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                items.take(8).forEach { row ->
+                    Text(
+                        text = row,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                if (items.size > 8) {
+                    Text(
+                        text = "+ ${items.size - 8} more",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }

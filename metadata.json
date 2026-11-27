@@ -1,6 +1,6 @@
 {
-  "name": "GM Hasmani Committee Manager",
-  "description": "Personal committee (Kameti) management application for GM HASMANI with dynamic member counts, payout schedules, installment ledger, PDF reports, and WhatsApp/SMS reminders.",
+  "name": "GM HASMANI COMMITTEE",
+  "description": "Permanent committee (Kameti) management system for GM HASMANI COMMITTEE with multi-committee shares, turn tracking, 28th-8th schedules, Easypaisa payment requests, historical records, and 9 PDF reports.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

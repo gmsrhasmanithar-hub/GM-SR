@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,25 +12,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudQueue
-import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.PictureAsPdf
-import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Share
-import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -40,6 +38,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,11 +52,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.data.PdfReportType
+import com.example.i18n.AppLanguage
 import com.example.i18n.UiStrings
-import com.example.model.Committee
-import com.example.model.CommitteeMember
+import com.example.model.AppCompanySettings
 import com.example.model.LocalUser
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.StatusPaidGreen
@@ -67,16 +66,14 @@ import com.example.ui.theme.StatusUnpaidRed
 @Composable
 fun HistoryReportsSettingsScreen(
     strings: UiStrings,
-    activeCommittee: Committee?,
-    members: List<CommitteeMember>,
+    companySettings: AppCompanySettings,
+    language: AppLanguage,
     currentUser: LocalUser?,
     pendingUploadCount: Int,
     completedUploadCount: Int,
     failedUploadCount: Int,
-    onViewPdf: (PdfReportType, CommitteeMember?) -> Unit,
-    onPrintPdf: (PdfReportType, CommitteeMember?) -> Unit,
-    onDownloadPdf: (PdfReportType, CommitteeMember?) -> Unit,
-    onSharePdf: (PdfReportType, CommitteeMember?) -> Unit,
+    onSaveCompanySettings: (AppCompanySettings) -> Unit,
+    onLanguageChange: (AppLanguage) -> Unit,
     onOpenAppSettings: () -> Unit,
     onOpenUploadPending: () -> Unit,
     onOpenUploadCompleted: () -> Unit,
@@ -89,15 +86,46 @@ fun HistoryReportsSettingsScreen(
     onOpenAuditLog: () -> Unit,
     onLogout: () -> Unit
 ) {
-    var selectedReportType by remember { mutableStateOf(PdfReportType.COMPLETE_SUMMARY) }
-    var selectedMemberForReport by remember(members) { mutableStateOf(members.firstOrNull()) }
+    var companyName by remember(companySettings) { mutableStateOf(companySettings.companyName) }
+    var adminName by remember(companySettings) { mutableStateOf(companySettings.adminName) }
+    var adminPhone by remember(companySettings) { mutableStateOf(companySettings.adminContactNumber) }
+    var pdfFooter by remember(companySettings) { mutableStateOf(companySettings.pdfFooterNote) }
+
+    var easypaisaNumber by remember(companySettings) { mutableStateOf(companySettings.easypaisaNumber) }
+    var easypaisaHolder by remember(companySettings) { mutableStateOf(companySettings.easypaisaAccountHolder) }
+
+    var currency by remember(companySettings) { mutableStateOf(companySettings.currency) }
+    var defMonthlyContrib by remember(companySettings) { mutableStateOf(companySettings.defaultMonthlyContribution.toString()) }
+    var defTotalShares by remember(companySettings) { mutableStateOf(companySettings.defaultTotalShares.toString()) }
+    var defDuration by remember(companySettings) { mutableStateOf(companySettings.defaultDurationMonths.toString()) }
+    var defStartDay by remember(companySettings) { mutableStateOf(companySettings.defaultCollectionStartDay.toString()) }
+    var defEndDay by remember(companySettings) { mutableStateOf(companySettings.defaultCollectionEndDay.toString()) }
+
+    fun persistAllSettings() {
+        onSaveCompanySettings(
+            companySettings.copy(
+                companyName = companyName.trim().ifEmpty { "GM HASMANI COMMITTEE" },
+                adminName = adminName.trim().ifEmpty { "GM Hasmani Admin" },
+                adminContactNumber = adminPhone.trim(),
+                pdfFooterNote = pdfFooter.trim().ifEmpty { "Official GM HASMANI Committee Record" },
+                easypaisaNumber = easypaisaNumber.trim().ifEmpty { "03423498631" },
+                easypaisaAccountHolder = easypaisaHolder.trim().ifEmpty { "GM Hasmani Admin" },
+                currency = currency.trim().ifEmpty { "PKR" },
+                defaultMonthlyContribution = defMonthlyContrib.toLongOrNull()?.coerceAtLeast(100L) ?: 5000L,
+                defaultTotalShares = defTotalShares.toLongOrNull()?.coerceAtLeast(1L) ?: 10L,
+                defaultDurationMonths = defDuration.toLongOrNull()?.coerceAtLeast(2L) ?: 10L,
+                defaultCollectionStartDay = defStartDay.toLongOrNull()?.coerceIn(1L, 31L) ?: 28L,
+                defaultCollectionEndDay = defEndDay.toLongOrNull()?.coerceIn(1L, 31L) ?: 8L
+            )
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Section 1: Reports (View / Print / Download / Share)
+        // 1. Company Settings
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -108,112 +136,170 @@ fun HistoryReportsSettingsScreen(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(Icons.Rounded.PictureAsPdf, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                        Text(strings.pdfReportsTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Rounded.Business, contentDescription = null, tint = EmeraldPrimary)
+                        Text(strings.companySettingsTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     }
-
-                    if (activeCommittee == null) {
-                        Text(
-                            text = strings.noCommitteeTitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                    OutlinedTextField(
+                        value = companyName,
+                        onValueChange = { companyName = it },
+                        label = { Text("Company / PDF Heading") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("settings_company_name_input")
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = adminName,
+                            onValueChange = { adminName = it },
+                            label = { Text("Admin Name") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
                         )
-                    } else {
-                        val reports = listOf(
-                            PdfReportType.COMPLETE_SUMMARY to strings.reportCompleteSummary,
-                            PdfReportType.COLLECTION_REPORT to strings.reportCollection,
-                            PdfReportType.MONTHLY_PAYMENT to strings.reportMonthlyPayment,
-                            PdfReportType.PAID_MEMBERS_REPORT to strings.reportPaidMembers,
-                            PdfReportType.UNPAID_MEMBERS_REPORT to strings.reportUnpaidMembers,
-                            PdfReportType.MEMBER_LIST to strings.reportMemberList,
-                            PdfReportType.PAYOUT_REPORT to strings.reportPayout,
-                            PdfReportType.INDIVIDUAL_HISTORY to strings.reportIndividualHistory
+                        OutlinedTextField(
+                            value = adminPhone,
+                            onValueChange = { adminPhone = it },
+                            label = { Text("Admin Phone") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
                         )
-                        Row(
-                            modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            reports.forEach { (type, title) ->
-                                FilterChip(
-                                    selected = selectedReportType == type,
-                                    onClick = { selectedReportType = type },
-                                    label = { Text(title) }
-                                )
-                            }
-                        }
-
-                        if (selectedReportType == PdfReportType.INDIVIDUAL_HISTORY && members.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                members.sortedBy { it.committeeNumber }.forEach { m ->
-                                    FilterChip(
-                                        selected = selectedMemberForReport?.id == m.id,
-                                        onClick = { selectedMemberForReport = m },
-                                        label = { Text("#${m.committeeNumber} ${m.name}") }
-                                    )
-                                }
-                            }
-                        }
-
-                        val targetMember = if (selectedReportType == PdfReportType.INDIVIDUAL_HISTORY) selectedMemberForReport else null
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Button(
-                                onClick = { onViewPdf(selectedReportType, targetMember) },
-                                modifier = Modifier.weight(1f).testTag("report_view_btn"),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Rounded.Visibility, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(strings.viewLabel)
-                            }
-                            Button(
-                                onClick = { onPrintPdf(selectedReportType, targetMember) },
-                                modifier = Modifier.weight(1f).testTag("report_print_btn"),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Rounded.Print, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(strings.printLabel)
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { onDownloadPdf(selectedReportType, targetMember) },
-                                modifier = Modifier.weight(1f).testTag("report_download_btn"),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(strings.downloadLabel)
-                            }
-                            OutlinedButton(
-                                onClick = { onSharePdf(selectedReportType, targetMember) },
-                                modifier = Modifier.weight(1f).testTag("report_share_btn"),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Rounded.Share, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Share")
-                            }
-                        }
+                    }
+                    OutlinedTextField(
+                        value = pdfFooter,
+                        onValueChange = { pdfFooter = it },
+                        label = { Text("PDF Footer Note") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(
+                        onClick = { persistAllSettings() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(strings.save)
                     }
                 }
             }
         }
 
-        // Section 2: Simple Settings (Exact 9 requested settings + Backup & Restore buttons + Audit Log)
+        // 2. Easypaisa Settings
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Rounded.AccountBalanceWallet, contentDescription = null, tint = StatusPaidGreen)
+                        Text(strings.easypaisaSettingsTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedTextField(
+                        value = easypaisaNumber,
+                        onValueChange = { easypaisaNumber = it },
+                        label = { Text("Easypaisa Number") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("settings_easypaisa_number_input")
+                    )
+                    OutlinedTextField(
+                        value = easypaisaHolder,
+                        onValueChange = { easypaisaHolder = it },
+                        label = { Text("Account Holder Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("settings_easypaisa_holder_input")
+                    )
+                    Button(
+                        onClick = { persistAllSettings() },
+                        modifier = Modifier.fillMaxWidth().testTag("save_easypaisa_settings_btn"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(strings.save)
+                    }
+                }
+            }
+        }
+
+        // 3. Committee Default Settings
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Icon(Icons.Rounded.Tune, contentDescription = null, tint = EmeraldPrimary)
+                        Text(strings.committeeDefaultsTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = defMonthlyContrib,
+                            onValueChange = { defMonthlyContrib = it.filter { c -> c.isDigit() } },
+                            label = { Text("Default Share Amt") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = defTotalShares,
+                            onValueChange = { defTotalShares = it.filter { c -> c.isDigit() } },
+                            label = { Text("Default Shares") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = defDuration,
+                            onValueChange = { defDuration = it.filter { c -> c.isDigit() } },
+                            label = { Text("Duration (Mo)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = defStartDay,
+                            onValueChange = { defStartDay = it.filter { c -> c.isDigit() } },
+                            label = { Text("Start Day") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = defEndDay,
+                            onValueChange = { defEndDay = it.filter { c -> c.isDigit() } },
+                            label = { Text("End Day") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Button(
+                        onClick = { persistAllSettings() },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Save, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(strings.save)
+                    }
+                }
+            }
+        }
+
+        // 4. Application Settings + Backup + Users + Security
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -229,7 +315,7 @@ fun HistoryReportsSettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(strings.settingsSectionTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(strings.appSettingsTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         currentUser?.let { u ->
                             Surface(
                                 color = EmeraldPrimary.copy(alpha = 0.14f),
@@ -246,16 +332,32 @@ fun HistoryReportsSettingsScreen(
                         }
                     }
 
-                    // 1. App Settings
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AppLanguage.entries.forEach { lang ->
+                            FilterChip(
+                                selected = language == lang,
+                                onClick = { onLanguageChange(lang) },
+                                label = { Text(lang.label) }
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        OutlinedTextField(
+                            value = currency,
+                            onValueChange = { currency = it },
+                            label = { Text("Currency") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
                     SimpleSettingsItemRow(
-                        title = strings.appSettingsTitle,
+                        title = strings.messagingApiSettingsTitle,
                         icon = Icons.Rounded.Settings,
                         accent = EmeraldPrimary,
                         onClick = onOpenAppSettings,
                         testTag = "setting_app_settings"
                     )
 
-                    // 2. Upload Pending
                     SimpleSettingsItemRow(
                         title = strings.uploadPendingTitle,
                         badge = "$pendingUploadCount",
@@ -265,7 +367,6 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_upload_pending"
                     )
 
-                    // 3. Upload Completed
                     SimpleSettingsItemRow(
                         title = strings.uploadCompletedTitle,
                         badge = "$completedUploadCount",
@@ -275,7 +376,6 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_upload_completed"
                     )
 
-                    // 4. Failed Uploads
                     SimpleSettingsItemRow(
                         title = strings.failedUploadsTitle,
                         badge = "$failedUploadCount",
@@ -285,7 +385,6 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_failed_uploads"
                     )
 
-                    // 5. Retry Upload
                     SimpleSettingsItemRow(
                         title = strings.retryUploadTitle,
                         badge = "${pendingUploadCount + failedUploadCount}",
@@ -295,7 +394,6 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_retry_upload"
                     )
 
-                    // 6. Backup and Restore
                     Surface(
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                         shape = RoundedCornerShape(14.dp),
@@ -329,7 +427,6 @@ fun HistoryReportsSettingsScreen(
                         }
                     }
 
-                    // 7. User Management
                     SimpleSettingsItemRow(
                         title = strings.userManagementTitle,
                         icon = Icons.Rounded.Group,
@@ -338,7 +435,6 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_user_management"
                     )
 
-                    // 8. Change Password
                     SimpleSettingsItemRow(
                         title = strings.changePasswordTitle,
                         icon = Icons.Rounded.Lock,
@@ -347,7 +443,6 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_change_password"
                     )
 
-                    // Audit Log quick entry
                     SimpleSettingsItemRow(
                         title = strings.auditLogTitle,
                         icon = Icons.Rounded.History,
@@ -356,9 +451,14 @@ fun HistoryReportsSettingsScreen(
                         testTag = "setting_audit_log"
                     )
 
+                    Text(
+                        text = "${companySettings.companyName} • Offline Room DB v3 (Preserving All User Data)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
                     HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
 
-                    // 9. Logout
                     SimpleSettingsItemRow(
                         title = strings.logoutTitle,
                         icon = Icons.AutoMirrored.Rounded.Logout,

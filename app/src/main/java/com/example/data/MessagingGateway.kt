@@ -1,8 +1,11 @@
 package com.example.data
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.example.model.AppCompanySettings
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.FormatUtils
@@ -34,7 +37,8 @@ class MessagingGateway(
         member: CommitteeMember,
         committee: Committee,
         monthKey: String,
-        dueAmount: Long
+        dueAmount: Long,
+        settings: AppCompanySettings = AppCompanySettings()
     ): String {
         val window = MonthUtils.formatCollectionWindow(
             monthKey,
@@ -43,16 +47,50 @@ class MessagingGateway(
         )
         return template
             .replace("{name}", member.name)
-            .replace("{amount}", FormatUtils.formatPkr(dueAmount))
+            .replace("{amount}", FormatUtils.formatMoney(dueAmount, settings.currency))
             .replace("{committee}", committee.name)
             .replace("{month}", MonthUtils.formatMonthDisplay(monthKey))
             .replace("{window}", window)
             .replace("{number}", "#${member.committeeNumber}")
+            .replace("{easypaisa}", settings.easypaisaNumber)
+            .replace("{holder}", settings.easypaisaAccountHolder)
+    }
+
+    fun buildPaymentRequestMessage(
+        memberName: String,
+        amount: Long,
+        dueDate: String,
+        committeeName: String,
+        settings: AppCompanySettings
+    ): String {
+        val formattedAmount = FormatUtils.formatCompactNumber(amount)
+        val epNumber = settings.easypaisaNumber.ifBlank { "03423498631" }
+        val holder = settings.easypaisaAccountHolder.ifBlank { settings.adminName }
+        val currency = settings.currency.ifBlank { "PKR" }
+        return buildString {
+            appendLine("Assalam-o-Alaikum $memberName,")
+            appendLine("Your monthly committee installment ($committeeName) of $currency $formattedAmount is due by $dueDate.")
+            appendLine("Please send your payment via Easypaisa:")
+            appendLine("Easypaisa Number: $epNumber")
+            appendLine("Account Holder: $holder")
+            appendLine("JazakAllah.")
+            append("- ${settings.companyName} Management")
+        }
+    }
+
+    fun copyToClipboard(context: Context, label: String, text: String): Boolean {
+        return try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                ?: return false
+            clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
      * Real WhatsApp Business Cloud API dispatch (Meta Graph API v21.0).
-     * Returns Success ONLY when Meta Cloud API returns HTTP 2xx with a message ID.
      */
     suspend fun sendViaWhatsAppCloudApi(
         config: MessagingGatewayConfig,
@@ -117,8 +155,6 @@ class MessagingGateway(
 
     /**
      * Real HTTP SMS Gateway dispatch.
-     * Posts JSON { to, message, senderId } with optional Bearer API key.
-     * Returns Success ONLY when gateway responds HTTP 2xx.
      */
     suspend fun sendViaSmsGateway(
         config: MessagingGatewayConfig,
@@ -159,14 +195,14 @@ class MessagingGateway(
         }
     }
 
-    /**
-     * Opens WhatsApp directly with pre-filled recipient number and prepared message.
-     * Returns true if an app handled the intent, false if WhatsApp/browser could not be launched.
-     */
     fun openWhatsAppManual(context: Context, rawPhone: String, messageBody: String): Boolean {
         val digits = PhoneUtils.toWhatsAppDigits(rawPhone)
         val encoded = URLEncoder.encode(messageBody, "UTF-8")
-        val uri = Uri.parse("https://wa.me/$digits?text=$encoded")
+        val uri = if (digits.length >= 7) {
+            Uri.parse("https://wa.me/$digits?text=$encoded")
+        } else {
+            Uri.parse("https://wa.me/?text=$encoded")
+        }
         val intent = Intent(Intent.ACTION_VIEW, uri).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
@@ -178,12 +214,10 @@ class MessagingGateway(
         }
     }
 
-    /**
-     * Opens the device SMS app using zero-permission ACTION_SENDTO smsto: intent.
-     */
     fun openSmsManual(context: Context, rawPhone: String, messageBody: String): Boolean {
         val cleanedPhone = PhoneUtils.toE164(rawPhone)
-        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$cleanedPhone")).apply {
+        val uri = if (cleanedPhone.isNotBlank()) Uri.parse("smsto:$cleanedPhone") else Uri.parse("smsto:")
+        val intent = Intent(Intent.ACTION_SENDTO, uri).apply {
             putExtra("sms_body", messageBody)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }

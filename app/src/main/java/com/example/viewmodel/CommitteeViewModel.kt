@@ -13,10 +13,12 @@ import com.example.data.MessagingGatewayConfig
 import com.example.data.PdfReportGenerator
 import com.example.data.PdfReportType
 import com.example.i18n.AppLanguage
+import com.example.model.AppCompanySettings
 import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
+import com.example.model.CommitteeTurn
 import com.example.model.CommitteeUtils
 import com.example.model.DashboardSummary
 import com.example.model.DispatchStatus
@@ -27,8 +29,11 @@ import com.example.model.LocalUser
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.MonthlyChartPoint
+import com.example.model.OldCommitteeRecord
+import com.example.model.OldHistoryCsvUtils
 import com.example.model.PasswordHasher
 import com.example.model.PaymentHistoryLog
+import com.example.model.PaymentMethod
 import com.example.model.PayoutStatus
 import com.example.model.ReminderChannel
 import com.example.model.ReminderLog
@@ -91,6 +96,9 @@ class CommitteeViewModel(
 
     val messagingConfig: StateFlow<MessagingGatewayConfig> = configStore.configFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), MessagingGatewayConfig())
+
+    val companySettings: StateFlow<AppCompanySettings> = configStore.companySettingsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), AppCompanySettings())
 
     val customTemplates: StateFlow<Map<Pair<ReminderStage, AppLanguage>, String>> = configStore.templatesFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyMap())
@@ -175,6 +183,17 @@ class CommitteeViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
+    val turnsState: StateFlow<List<CommitteeTurn>> = activeCommitteeIdFlow
+        .flatMapLatest { cid ->
+            if (cid.isBlank()) flowOf(emptyList())
+            else repository.observeTurns(cid).catch { emit(emptyList()) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val oldRecords: StateFlow<List<OldCommitteeRecord>> = repository.observeOldRecords()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
     val installmentsState: StateFlow<UiState<List<InstallmentRecord>>> = activeCommitteeIdFlow
         .flatMapLatest { cid ->
             if (cid.isBlank()) flowOf<UiState<List<InstallmentRecord>>>(UiState.Success(emptyList()))
@@ -201,19 +220,35 @@ class CommitteeViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
-    val dashboardSummary: StateFlow<DashboardSummary?> = combine(
+    private val coreInputsFlow = combine(
         committeesState,
         activeCommittee,
         membersState,
         installmentsState,
+        turnsState
+    ) { allC, c, m, i, t ->
+        SummaryInputs(allC, c, m, i, t)
+    }
+
+    val dashboardSummary: StateFlow<DashboardSummary?> = combine(
+        coreInputsFlow,
         _selectedMonthKey
-    ) { allCommitteesState, committee, mState, iState, selectedMonth ->
-        if (committee == null) return@combine null
-        val allCommittees = (allCommitteesState as? UiState.Success)?.data ?: emptyList()
-        val activeCommitteeCount = allCommittees.count { it.statusEnum == CommitteeStatus.ACTIVE }.coerceAtLeast(1)
-        val members = (mState as? UiState.Success)?.data ?: emptyList()
-        val installments = (iState as? UiState.Success)?.data ?: emptyList()
-        computeSummary(activeCommitteeCount, committee, members, installments, selectedMonth)
+    ) { inputs, selectedMonth ->
+        val committee = inputs.activeCommittee ?: return@combine null
+        val allCommittees = (inputs.allCommittees as? UiState.Success)?.data ?: emptyList()
+        val activeCommitteeCount = allCommittees.count { it.statusEnum == CommitteeStatus.ACTIVE }
+        val completedCommitteeCount = allCommittees.count { it.statusEnum == CommitteeStatus.COMPLETED }
+        val members = (inputs.members as? UiState.Success)?.data ?: emptyList()
+        val installments = (inputs.installments as? UiState.Success)?.data ?: emptyList()
+        computeSummary(
+            totalActiveCommittees = activeCommitteeCount.coerceAtLeast(if (committee.statusEnum == CommitteeStatus.ACTIVE) 1 else 0),
+            totalCompletedCommittees = completedCommitteeCount,
+            committee = committee,
+            members = members,
+            installments = installments,
+            turns = inputs.turns,
+            selectedMonthKey = selectedMonth
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     init {
@@ -221,6 +256,11 @@ class CommitteeViewModel(
             val admin = repository.ensureDefaultAdmin()
             if (currentUser.value == null) {
                 configStore.saveSession(admin.id, isLoggedOut = false)
+            }
+            val seededId = repository.ensureKnownInitialCommitteeIfEmpty()
+            if (seededId != null && _selectedCommitteeId.value == null) {
+                _selectedCommitteeId.value = seededId
+                configStore.saveActiveCommitteeId(seededId)
             }
         }
 
@@ -273,9 +313,11 @@ class CommitteeViewModel(
 
     private fun computeSummary(
         totalActiveCommittees: Int,
+        totalCompletedCommittees: Int,
         committee: Committee,
         members: List<CommitteeMember>,
         installments: List<InstallmentRecord>,
+        turns: List<CommitteeTurn>,
         selectedMonthKey: String
     ): DashboardSummary {
         val activeMembers = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.sortedBy { it.committeeNumber }
@@ -300,13 +342,46 @@ class CommitteeViewModel(
             activeMembers.size
         }
 
-        val completedPayouts = activeMembers.count { it.payoutStatusEnum == PayoutStatus.PAID }
-        val nextPayout = activeMembers.firstOrNull { it.payoutStatusEnum == PayoutStatus.PENDING }
-        val upcomingPayoutDate = if (nextPayout != null) {
-            MonthUtils.formatPayoutDate(nextPayout.payoutMonth, committee.payoutDay, committee.collectionDayStart)
+        val sortedTurns = turns.sortedBy { it.turnNumber }
+        val nextTurn = sortedTurns.firstOrNull { it.statusEnum == PayoutStatus.PENDING }
+        val nextPayoutMemberFallback = activeMembers.firstOrNull { it.payoutStatusEnum == PayoutStatus.PENDING }
+
+        val completedPayouts = if (sortedTurns.isNotEmpty()) {
+            sortedTurns.count { it.statusEnum == PayoutStatus.PAID }
         } else {
-            MonthUtils.formatPayoutDate(effectiveMonthKey, committee.payoutDay, committee.collectionDayStart)
+            activeMembers.count { it.payoutStatusEnum == PayoutStatus.PAID }
         }
+
+        val totalPayoutsAmt = if (sortedTurns.isNotEmpty()) {
+            sortedTurns.filter { it.statusEnum == PayoutStatus.PAID }.sumOf { it.payoutAmount }
+        } else {
+            activeMembers.filter { it.payoutStatusEnum == PayoutStatus.PAID }
+                .sumOf { if (it.payoutAmount > 0L) it.payoutAmount else committee.eachPayoutAmount }
+        }
+
+        val nextPayoutAmt = nextTurn?.payoutAmount
+            ?: nextPayoutMemberFallback?.let { if (it.payoutAmount > 0L) it.payoutAmount else committee.eachPayoutAmount }
+            ?: committee.eachPayoutAmount
+
+        val upcomingPayoutDate = when {
+            nextTurn != null -> MonthUtils.formatCollectionWindow(
+                nextTurn.scheduledMonth,
+                committee.collectionDayStart,
+                committee.collectionDayEnd
+            )
+            nextPayoutMemberFallback != null -> MonthUtils.formatPayoutDate(
+                nextPayoutMemberFallback.payoutMonth,
+                committee.payoutDay,
+                committee.collectionDayStart
+            )
+            else -> MonthUtils.formatPayoutDate(effectiveMonthKey, committee.payoutDay, committee.collectionDayStart)
+        }
+
+        val nextPaymentDueDate = MonthUtils.formatDueDate(
+            nextTurn?.scheduledMonth ?: effectiveMonthKey,
+            committee.collectionDayStart,
+            committee.collectionDayEnd
+        )
 
         val groupedByMonth = installments.groupBy { it.monthKey }
         val chartPoints = monthKeys.map { key ->
@@ -322,11 +397,15 @@ class CommitteeViewModel(
         }
 
         val remainingMonths = (committee.totalMonths.toInt() - completedPayouts).coerceAtLeast(0)
+        val totalMemberShares = activeMembers.sumOf { it.effectiveShares }
 
         return DashboardSummary(
             totalActiveCommittees = totalActiveCommittees,
+            totalCompletedCommittees = totalCompletedCommittees,
             activeMemberCount = activeMembers.size,
             targetMemberCount = committee.memberCount.toInt(),
+            totalSharesConfigured = committee.effectiveTotalShares,
+            totalMemberShares = totalMemberShares,
             monthlyCollectionTarget = monthlyTarget,
             currentMonthCollected = monthCollected,
             currentMonthPending = monthPending,
@@ -338,9 +417,13 @@ class CommitteeViewModel(
             currentMonthKey = effectiveMonthKey,
             currentMonthIndex = monthIndex,
             totalMonths = committee.totalMonths.toInt(),
-            nextPayoutMember = nextPayout,
+            nextPayoutMember = nextPayoutMemberFallback,
+            nextPayoutTurn = nextTurn,
+            nextPayoutAmount = nextPayoutAmt,
             upcomingPayoutDate = upcomingPayoutDate,
+            nextPaymentDueDate = nextPaymentDueDate,
             completedPayouts = completedPayouts,
+            totalPayoutsAmount = totalPayoutsAmt,
             remainingMonths = remainingMonths,
             monthlyChartPoints = chartPoints
         )
@@ -368,6 +451,13 @@ class CommitteeViewModel(
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             configStore.saveLanguage(language)
+        }
+    }
+
+    fun saveCompanySettings(settings: AppCompanySettings) {
+        viewModelScope.launch {
+            configStore.saveCompanySettings(settings)
+            _snackbarEvents.tryEmit("Settings saved.")
         }
     }
 
@@ -400,6 +490,7 @@ class CommitteeViewModel(
     fun createCommittee(
         name: String,
         memberCount: Long,
+        totalShares: Long,
         monthlyInstallment: Long,
         totalMonths: Long,
         collectionDayStart: Long,
@@ -411,7 +502,7 @@ class CommitteeViewModel(
         viewModelScope.launch {
             _isBusy.value = true
             val res = repository.createCommittee(
-                name, memberCount, monthlyInstallment, totalMonths,
+                name, memberCount, totalShares, monthlyInstallment, totalMonths,
                 collectionDayStart, collectionDayEnd, payoutDay, startMonth, notes, actorName()
             )
             _isBusy.value = false
@@ -430,6 +521,7 @@ class CommitteeViewModel(
         existing: Committee,
         newName: String,
         newMemberCount: Long,
+        newTotalShares: Long,
         newMonthlyInstallment: Long,
         newTotalMonths: Long,
         newCollectionDayStart: Long,
@@ -441,7 +533,7 @@ class CommitteeViewModel(
         viewModelScope.launch {
             _isBusy.value = true
             val res = repository.updateCommitteeWithFutureRecalculation(
-                existing, newName, newMemberCount, newMonthlyInstallment, newTotalMonths,
+                existing, newName, newMemberCount, newTotalShares, newMonthlyInstallment, newTotalMonths,
                 newCollectionDayStart, newCollectionDayEnd, newPayoutDay, newStartMonth, newNotes, actorName()
             )
             _isBusy.value = false
@@ -486,10 +578,10 @@ class CommitteeViewModel(
     }
 
     // -------------------------------------------------------------------------
-    // Member & Payout Actions
+    // Member Actions
     // -------------------------------------------------------------------------
 
-    fun addMember(name: String, phone: String, committeeNumber: Long) {
+    fun addMember(name: String, phone: String, committeeNumber: Long, shares: Double = 1.0) {
         val committee = activeCommittee.value ?: return
         val existingMembers = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val conflict = CommitteeUtils.findDuplicateMember(existingMembers, phone, committeeNumber)
@@ -505,7 +597,7 @@ class CommitteeViewModel(
         }
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.addMember(committee, name, phone, committeeNumber, actorName())
+            val res = repository.addMember(committee, name, phone, committeeNumber, shares, actorName())
             _isBusy.value = false
             res.onSuccess {
                 _snackbarEvents.tryEmit("Member \"$name\" added (#$committeeNumber).")
@@ -515,7 +607,13 @@ class CommitteeViewModel(
         }
     }
 
-    fun updateMember(member: CommitteeMember, newName: String, newPhone: String, newCommitteeNumber: Long) {
+    fun updateMember(
+        member: CommitteeMember,
+        newName: String,
+        newPhone: String,
+        newCommitteeNumber: Long,
+        newShares: Double = member.effectiveShares
+    ) {
         val committee = activeCommittee.value ?: return
         val existingMembers = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val conflict = CommitteeUtils.findDuplicateMember(
@@ -535,7 +633,7 @@ class CommitteeViewModel(
             return
         }
         viewModelScope.launch {
-            repository.updateMember(committee, member, newName, newPhone, newCommitteeNumber, actorName())
+            repository.updateMember(committee, member, newName, newPhone, newCommitteeNumber, newShares, actorName())
                 .onSuccess { _snackbarEvents.tryEmit("Member updated.") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update member.") }
         }
@@ -593,6 +691,165 @@ class CommitteeViewModel(
     }
 
     // -------------------------------------------------------------------------
+    // Committee Turns Actions
+    // -------------------------------------------------------------------------
+
+    fun saveCommitteeTurn(
+        existingTurn: CommitteeTurn?,
+        turnNumber: Long,
+        recipientMemberId: String?,
+        recipientName: String,
+        recipientPhone: String?,
+        payoutAmount: Long,
+        scheduledMonth: String,
+        payoutDate: String?,
+        status: PayoutStatus,
+        confirmedByAdmin: Boolean,
+        notes: String?
+    ) {
+        val committee = activeCommittee.value ?: return
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.saveCommitteeTurn(
+                committee = committee,
+                existingTurn = existingTurn,
+                turnNumber = turnNumber,
+                recipientMemberId = recipientMemberId,
+                recipientName = recipientName,
+                recipientPhone = recipientPhone,
+                payoutAmount = payoutAmount,
+                scheduledMonth = scheduledMonth,
+                payoutDate = payoutDate,
+                status = status,
+                confirmedByAdmin = confirmedByAdmin,
+                notes = notes,
+                actorName = actorName()
+            )
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Turn #$turnNumber ($recipientName) saved.")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to save turn.")
+            }
+        }
+    }
+
+    fun swapTurnOrder(first: CommitteeTurn, second: CommitteeTurn) {
+        val committee = activeCommittee.value ?: return
+        viewModelScope.launch {
+            repository.swapTurnOrder(committee, first, second, actorName())
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to swap turn order.") }
+        }
+    }
+
+    fun generateTurnsFromMembers() {
+        val committee = activeCommittee.value ?: return
+        val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.generateTurnsFromMembers(committee, members, actorName())
+            _isBusy.value = false
+            res.onSuccess { count ->
+                _snackbarEvents.tryEmit(
+                    if (count > 0) "Generated $count turn(s) based on member shares."
+                    else "All share turns already exist."
+                )
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Could not generate turns.")
+            }
+        }
+    }
+
+    fun loadKnownHistoryTurns() {
+        val committee = activeCommittee.value ?: return
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.loadKnownHistoryTurnsForCommittee(committee.id, actorName())
+            _isBusy.value = false
+            res.onSuccess { added ->
+                _snackbarEvents.tryEmit(
+                    if (added > 0) "Loaded $added known turn record(s) (Turns 1–4)."
+                    else "Known turns 1–4 already present."
+                )
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to load known turns.")
+            }
+        }
+    }
+
+    fun deleteCommitteeTurn(
+        turn: CommitteeTurn,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.deleteTurnSafely(turn, currentUser.value, adminPassword)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Turn #${turn.turnNumber} deleted.")
+                onResult(true, null)
+            }.onFailure {
+                val msg = it.localizedMessage ?: "Could not delete turn."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Old Committee Records / History Actions
+    // -------------------------------------------------------------------------
+
+    fun saveOldCommitteeRecord(record: OldCommitteeRecord) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.saveOldCommitteeRecord(record, actorName())
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Old committee record saved.")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to save old record.")
+            }
+        }
+    }
+
+    fun importOldRecordsCsv(csvText: String) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.importOldRecordsFromCsv(csvText, actorName())
+            _isBusy.value = false
+            res.onSuccess { count ->
+                _snackbarEvents.tryEmit("Imported $count old committee record(s) from CSV.")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "CSV import failed.")
+            }
+        }
+    }
+
+    fun exportOldRecordsCsv(): String = OldHistoryCsvUtils.exportToCsv(oldRecords.value)
+
+    fun deleteOldCommitteeRecord(
+        record: OldCommitteeRecord,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.deleteOldCommitteeRecord(record, currentUser.value, adminPassword)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Old committee record deleted.")
+                onResult(true, null)
+            }.onFailure {
+                val msg = it.localizedMessage ?: "Could not delete old record."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Installment & Safe Reversal / Delete Actions
     // -------------------------------------------------------------------------
 
@@ -629,6 +886,8 @@ class CommitteeViewModel(
         paidAmount: Long,
         status: InstallmentStatus,
         paymentDate: String?,
+        paymentMethod: PaymentMethod,
+        transactionId: String?,
         note: String?
     ) {
         val committee = activeCommittee.value ?: return
@@ -640,11 +899,47 @@ class CommitteeViewModel(
                 newStatus = status,
                 paymentDate = paymentDate,
                 paymentNote = note,
+                paymentMethod = paymentMethod,
+                transactionId = transactionId,
                 actorName = actorName()
             ).onSuccess {
                 _snackbarEvents.tryEmit("Saved ${record.memberName}: ${status.name}")
             }.onFailure {
                 _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to save payment.")
+            }
+        }
+    }
+
+    fun addOrUpdateManualPayment(
+        member: CommitteeMember,
+        monthKey: String,
+        paidAmount: Long,
+        status: InstallmentStatus,
+        paymentDate: String?,
+        paymentMethod: PaymentMethod,
+        transactionId: String?,
+        note: String?
+    ) {
+        val committee = activeCommittee.value ?: return
+        val months = MonthUtils.monthKeysForCommittee(committee.startMonth, committee.totalMonths.toInt())
+        val monthIndex = (months.indexOf(monthKey) + 1L).coerceAtLeast(1L)
+        viewModelScope.launch {
+            repository.recordOrAddManualPayment(
+                committee = committee,
+                member = member,
+                monthKey = monthKey,
+                monthIndex = monthIndex,
+                paidAmount = paidAmount,
+                status = status,
+                paymentDate = paymentDate,
+                paymentMethod = paymentMethod,
+                transactionId = transactionId,
+                paymentNote = note,
+                actorName = actorName()
+            ).onSuccess {
+                _snackbarEvents.tryEmit("Payment recorded for ${member.name} (${MonthUtils.formatMonthDisplay(monthKey)}).")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to record payment.")
             }
         }
     }
@@ -835,8 +1130,43 @@ class CommitteeViewModel(
     }
 
     // -------------------------------------------------------------------------
-    // Reminders
+    // Payment Request Messages & Reminders
     // -------------------------------------------------------------------------
+
+    fun buildPaymentRequestText(
+        memberName: String,
+        amount: Long,
+        dueDate: String
+    ): String {
+        val committeeName = activeCommittee.value?.name ?: companySettings.value.companyName
+        return gateway.buildPaymentRequestMessage(
+            memberName = memberName,
+            amount = amount,
+            dueDate = dueDate,
+            committeeName = committeeName,
+            settings = companySettings.value
+        )
+    }
+
+    fun copyMessageToClipboard(context: Context, text: String) {
+        if (gateway.copyToClipboard(context, "GM Hasmani Payment Request", text)) {
+            _snackbarEvents.tryEmit("Message copied to clipboard.")
+        } else {
+            _snackbarEvents.tryEmit("Could not copy message.")
+        }
+    }
+
+    fun shareRawMessageWhatsApp(context: Context, rawPhone: String, messageBody: String) {
+        if (!gateway.openWhatsAppManual(context, rawPhone, messageBody)) {
+            _snackbarEvents.tryEmit("Could not open WhatsApp on this device.")
+        }
+    }
+
+    fun shareRawMessageSms(context: Context, rawPhone: String, messageBody: String) {
+        if (!gateway.openSmsManual(context, rawPhone, messageBody)) {
+            _snackbarEvents.tryEmit("Could not open SMS app on this device.")
+        }
+    }
 
     fun saveCustomTemplate(stage: ReminderStage, language: AppLanguage, template: String) {
         viewModelScope.launch {
@@ -866,7 +1196,7 @@ class CommitteeViewModel(
         dueAmount: Long
     ): String {
         val committee = activeCommittee.value ?: return template
-        return gateway.renderMessage(template, member, committee, _selectedMonthKey.value, dueAmount)
+        return gateway.renderMessage(template, member, committee, _selectedMonthKey.value, dueAmount, companySettings.value)
     }
 
     fun sendViaApiToSelected(
@@ -892,7 +1222,7 @@ class CommitteeViewModel(
             var failed = 0
             val monthKey = _selectedMonthKey.value
             for ((member, dueAmt) in recipients) {
-                val message = gateway.renderMessage(template, member, committee, monthKey, dueAmt)
+                val message = gateway.renderMessage(template, member, committee, monthKey, dueAmt, companySettings.value)
                 val result = if (useWhatsApp) {
                     gateway.sendViaWhatsAppCloudApi(config, member.phone, message)
                 } else {
@@ -929,7 +1259,7 @@ class CommitteeViewModel(
     ): Boolean {
         val committee = activeCommittee.value ?: return false
         val monthKey = _selectedMonthKey.value
-        val message = gateway.renderMessage(template, member, committee, monthKey, dueAmount)
+        val message = gateway.renderMessage(template, member, committee, monthKey, dueAmount, companySettings.value)
         val launched = if (useWhatsApp) {
             gateway.openWhatsAppManual(context, member.phone, message)
         } else {
@@ -964,13 +1294,16 @@ class CommitteeViewModel(
         selectedMember: CommitteeMember?,
         shareMode: Boolean
     ) {
-        val committee = activeCommittee.value ?: run {
+        val committee = activeCommittee.value
+        val requiresCommittee = reportType != PdfReportType.PREVIOUS_COMMITTEE_HISTORY &&
+            reportType != PdfReportType.COMPLETE_FINANCIAL_SUMMARY
+        if (requiresCommittee && committee == null) {
             _snackbarEvents.tryEmit("Create or select a committee first.")
             return
         }
+        val allCommittees = (committeesState.value as? UiState.Success)?.data ?: emptyList()
         val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
-        val summary = dashboardSummary.value ?: return
 
         viewModelScope.launch {
             _isBusy.value = true
@@ -978,11 +1311,15 @@ class CommitteeViewModel(
                 context = context,
                 reportType = reportType,
                 committee = committee,
+                allCommittees = allCommittees,
                 members = members,
                 installments = installments,
+                turns = turnsState.value,
+                oldRecords = oldRecords.value,
                 selectedMonthKey = _selectedMonthKey.value,
                 selectedMember = selectedMember,
-                summary = summary
+                summary = dashboardSummary.value,
+                companySettings = companySettings.value
             )
             _isBusy.value = false
             res.onSuccess { file: File ->
@@ -1001,13 +1338,16 @@ class CommitteeViewModel(
         reportType: PdfReportType,
         selectedMember: CommitteeMember? = null
     ) {
-        val committee = activeCommittee.value ?: run {
+        val committee = activeCommittee.value
+        val requiresCommittee = reportType != PdfReportType.PREVIOUS_COMMITTEE_HISTORY &&
+            reportType != PdfReportType.COMPLETE_FINANCIAL_SUMMARY
+        if (requiresCommittee && committee == null) {
             _snackbarEvents.tryEmit("Create or select a committee first.")
             return
         }
+        val allCommittees = (committeesState.value as? UiState.Success)?.data ?: emptyList()
         val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
-        val summary = dashboardSummary.value ?: return
 
         viewModelScope.launch {
             _isBusy.value = true
@@ -1015,15 +1355,19 @@ class CommitteeViewModel(
                 context = context,
                 reportType = reportType,
                 committee = committee,
+                allCommittees = allCommittees,
                 members = members,
                 installments = installments,
+                turns = turnsState.value,
+                oldRecords = oldRecords.value,
                 selectedMonthKey = _selectedMonthKey.value,
                 selectedMember = selectedMember,
-                summary = summary
+                summary = dashboardSummary.value,
+                companySettings = companySettings.value
             )
             _isBusy.value = false
             res.onSuccess { file ->
-                PdfReportGenerator.printPdf(context, file, "GM HASMANI - ${committee.name}")
+                PdfReportGenerator.printPdf(context, file, "${companySettings.value.companyName} - ${committee?.name ?: "Report"}")
                     .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Print failed.") }
             }.onFailure {
                 _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to prepare print PDF.")
@@ -1037,13 +1381,16 @@ class CommitteeViewModel(
         selectedMember: CommitteeMember? = null,
         onReady: (File) -> Unit
     ) {
-        val committee = activeCommittee.value ?: run {
+        val committee = activeCommittee.value
+        val requiresCommittee = reportType != PdfReportType.PREVIOUS_COMMITTEE_HISTORY &&
+            reportType != PdfReportType.COMPLETE_FINANCIAL_SUMMARY
+        if (requiresCommittee && committee == null) {
             _snackbarEvents.tryEmit("Create or select a committee first.")
             return
         }
+        val allCommittees = (committeesState.value as? UiState.Success)?.data ?: emptyList()
         val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
-        val summary = dashboardSummary.value ?: return
 
         viewModelScope.launch {
             _isBusy.value = true
@@ -1051,11 +1398,15 @@ class CommitteeViewModel(
                 context = context,
                 reportType = reportType,
                 committee = committee,
+                allCommittees = allCommittees,
                 members = members,
                 installments = installments,
+                turns = turnsState.value,
+                oldRecords = oldRecords.value,
                 selectedMonthKey = _selectedMonthKey.value,
                 selectedMember = selectedMember,
-                summary = summary
+                summary = dashboardSummary.value,
+                companySettings = companySettings.value
             )
             _isBusy.value = false
             res.onSuccess(onReady)
@@ -1073,7 +1424,7 @@ class CommitteeViewModel(
 
     suspend fun exportBackupJson(): Result<String> {
         _isBusy.value = true
-        val res = repository.exportFullBackupJson()
+        val res = repository.exportFullBackupJson(companySettings.value)
         _isBusy.value = false
         return res
     }
@@ -1081,7 +1432,11 @@ class CommitteeViewModel(
     fun restoreBackupJson(json: String) {
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.restoreFromBackupJson(json, actorName())
+            val res = repository.restoreFromBackupJson(
+                jsonContent = json,
+                actorName = actorName(),
+                onRestoreSettings = { restored -> configStore.saveCompanySettings(restored) }
+            )
             _isBusy.value = false
             res.onSuccess { count ->
                 _snackbarEvents.tryEmit("Restored $count committees from backup.")
@@ -1090,6 +1445,14 @@ class CommitteeViewModel(
             }
         }
     }
+
+    private data class SummaryInputs(
+        val allCommittees: UiState<List<Committee>>,
+        val activeCommittee: Committee?,
+        val members: UiState<List<CommitteeMember>>,
+        val installments: UiState<List<InstallmentRecord>>,
+        val turns: List<CommitteeTurn>
+    )
 
     private companion object {
         const val TAG = "CommitteeVM"

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -71,10 +73,12 @@ fun InstallmentsScreen(
     committee: Committee?,
     members: List<CommitteeMember>,
     installments: List<InstallmentRecord>,
+    currency: String = "PKR",
     selectedMonthKey: String,
     activeFilter: InstallmentFilter,
     onSelectMonth: (String) -> Unit,
     onSelectFilter: (InstallmentFilter) -> Unit,
+    onAddManualPayment: () -> Unit,
     onSyncMonth: () -> Unit,
     onDeleteUnpaidMonth: (String) -> Unit,
     onQuickMarkPaid: (InstallmentRecord) -> Unit,
@@ -116,7 +120,9 @@ fun InstallmentsScreen(
         val q = searchText.trim().lowercase()
         if (q.isEmpty()) byStatus
         else byStatus.filter {
-            it.memberName.lowercase().contains(q) || it.memberPhone.lowercase().contains(q)
+            it.memberName.lowercase().contains(q) ||
+                it.memberPhone.lowercase().contains(q) ||
+                (it.transactionId?.lowercase()?.contains(q) == true)
         }
     }
 
@@ -132,6 +138,18 @@ fun InstallmentsScreen(
                 strings = strings,
                 onSelectMonth = onSelectMonth
             )
+        }
+
+        item {
+            Button(
+                onClick = onAddManualPayment,
+                modifier = Modifier.fillMaxWidth().height(50.dp).testTag("add_manual_payment_btn"),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(Icons.Rounded.Add, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(strings.addManualPaymentLabel, fontWeight = FontWeight.Bold)
+            }
         }
 
         // Monthly Collection Summary + Action Buttons
@@ -152,7 +170,7 @@ fun InstallmentsScreen(
                         Column {
                             Text(strings.totalReceived, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
-                                text = FormatUtils.formatPkr(totalReceived),
+                                text = FormatUtils.formatMoney(totalReceived, currency),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = StatusPaidGreen
@@ -161,7 +179,7 @@ fun InstallmentsScreen(
                         Column(horizontalAlignment = Alignment.End) {
                             Text(strings.remainingCollection, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(
-                                text = FormatUtils.formatPkr(totalRemaining),
+                                text = FormatUtils.formatMoney(totalRemaining, currency),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 color = if (totalRemaining == 0L) StatusPaidGreen else StatusUnpaidRed
@@ -306,12 +324,15 @@ fun InstallmentsScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = rec.memberPhone + (rec.paymentDate?.let { " • $it" } ?: ""),
+                                    text = rec.memberPhone +
+                                        (if (rec.paidAmount > 0L) " • ${rec.paymentMethodEnum.label}" else "") +
+                                        (rec.transactionId?.let { " • Tx: $it" } ?: "") +
+                                        (rec.paymentDate?.let { " • $it" } ?: ""),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = "${FormatUtils.formatPkr(rec.paidAmount)} / ${FormatUtils.formatPkr(rec.dueAmount)}",
+                                    text = "${FormatUtils.formatMoney(rec.paidAmount, currency)} / ${FormatUtils.formatMoney(rec.dueAmount, currency)}",
                                     style = MaterialTheme.typography.labelLarge,
                                     color = when (rec.statusEnum) {
                                         InstallmentStatus.PAID -> StatusPaidGreen
@@ -347,7 +368,7 @@ fun InstallmentsScreen(
                                     modifier = Modifier.weight(1f)
                                 ) {
                                     Text(
-                                        text = "${strings.paidLabel} • ${rec.paymentDate ?: MonthUtils.todayDateString()}",
+                                        text = "${rec.paymentMethodEnum.label} • ${rec.paymentDate ?: MonthUtils.todayDateString()}",
                                         style = MaterialTheme.typography.labelMedium,
                                         color = StatusPaidGreen,
                                         fontWeight = FontWeight.SemiBold,

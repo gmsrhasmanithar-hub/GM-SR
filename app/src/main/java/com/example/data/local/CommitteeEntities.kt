@@ -7,8 +7,10 @@ import androidx.room.PrimaryKey
 import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
+import com.example.model.CommitteeTurn
 import com.example.model.InstallmentRecord
 import com.example.model.LocalUser
+import com.example.model.OldCommitteeRecord
 import com.example.model.PaymentHistoryLog
 import com.example.model.ReminderLog
 import com.example.model.UploadQueueItem
@@ -18,6 +20,7 @@ data class CommitteeEntity(
     @PrimaryKey val id: String,
     val name: String,
     val memberCount: Long,
+    val totalShares: Long = 0L,
     val monthlyInstallment: Long,
     val totalMonths: Long,
     val collectionDayStart: Long,
@@ -34,6 +37,7 @@ data class CommitteeEntity(
         id = id,
         name = name,
         memberCount = memberCount,
+        totalShares = totalShares,
         monthlyInstallment = monthlyInstallment,
         totalMonths = totalMonths,
         collectionDayStart = collectionDayStart,
@@ -66,6 +70,7 @@ data class MemberEntity(
     val name: String,
     val phone: String,
     val committeeNumber: Long,
+    val shares: Double = 1.0,
     val payoutMonth: String,
     val payoutStatus: String,
     val payoutDate: String?,
@@ -80,10 +85,98 @@ data class MemberEntity(
         name = name,
         phone = phone,
         committeeNumber = committeeNumber,
+        shares = shares,
         payoutMonth = payoutMonth,
         payoutStatus = payoutStatus,
         payoutDate = payoutDate,
         payoutAmount = payoutAmount,
+        status = status,
+        createdAtMillis = createdAtMillis,
+        updatedAtMillis = updatedAtMillis
+    )
+}
+
+@Entity(
+    tableName = "committee_turns",
+    foreignKeys = [
+        ForeignKey(
+            entity = CommitteeEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["committeeId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("committeeId")]
+)
+data class CommitteeTurnEntity(
+    @PrimaryKey val id: String,
+    val committeeId: String,
+    val turnNumber: Long,
+    val recipientMemberId: String?,
+    val recipientName: String,
+    val recipientPhone: String?,
+    val payoutAmount: Long,
+    val scheduledMonth: String,
+    val payoutDate: String?,
+    val status: String,
+    val confirmedByAdmin: Boolean,
+    val notes: String?,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    fun toModel(): CommitteeTurn = CommitteeTurn(
+        id = id,
+        committeeId = committeeId,
+        turnNumber = turnNumber,
+        recipientMemberId = recipientMemberId,
+        recipientName = recipientName,
+        recipientPhone = recipientPhone,
+        payoutAmount = payoutAmount,
+        scheduledMonth = scheduledMonth,
+        payoutDate = payoutDate,
+        status = status,
+        confirmedByAdmin = confirmedByAdmin,
+        notes = notes,
+        createdAtMillis = createdAtMillis,
+        updatedAtMillis = updatedAtMillis
+    )
+}
+
+@Entity(tableName = "old_committee_records")
+data class OldCommitteeRecordEntity(
+    @PrimaryKey val id: String,
+    val committeeNumber: String,
+    val committeeName: String,
+    val startDate: String,
+    val endDate: String,
+    val memberNames: String,
+    val contactNumbers: String,
+    val numberOfShares: String,
+    val monthlyContributions: String,
+    val totalCollection: String,
+    val paymentHistory: String,
+    val payoutRecipient: String,
+    val payoutAmount: String,
+    val payoutDate: String,
+    val status: String,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    fun toModel(): OldCommitteeRecord = OldCommitteeRecord(
+        id = id,
+        committeeNumber = committeeNumber,
+        committeeName = committeeName,
+        startDate = startDate,
+        endDate = endDate,
+        memberNames = memberNames,
+        contactNumbers = contactNumbers,
+        numberOfShares = numberOfShares,
+        monthlyContributions = monthlyContributions,
+        totalCollection = totalCollection,
+        paymentHistory = paymentHistory,
+        payoutRecipient = payoutRecipient,
+        payoutAmount = payoutAmount,
+        payoutDate = payoutDate,
         status = status,
         createdAtMillis = createdAtMillis,
         updatedAtMillis = updatedAtMillis
@@ -116,6 +209,8 @@ data class InstallmentEntity(
     val status: String,
     val paymentDate: String?,
     val paymentNote: String?,
+    val paymentMethod: String = "CASH",
+    val transactionId: String? = null,
     val createdAtMillis: Long,
     val updatedAtMillis: Long
 ) {
@@ -133,6 +228,8 @@ data class InstallmentEntity(
         status = status,
         paymentDate = paymentDate,
         paymentNote = paymentNote,
+        paymentMethod = paymentMethod,
+        transactionId = transactionId,
         createdAtMillis = createdAtMillis,
         updatedAtMillis = updatedAtMillis
     )
@@ -161,6 +258,8 @@ data class PaymentLogEntity(
     val newPaidAmount: Long,
     val previousStatus: String,
     val newStatus: String,
+    val paymentMethod: String? = null,
+    val transactionId: String? = null,
     val actionNote: String?,
     val createdAtMillis: Long
 ) {
@@ -175,6 +274,8 @@ data class PaymentLogEntity(
         newPaidAmount = newPaidAmount,
         previousStatus = previousStatus,
         newStatus = newStatus,
+        paymentMethod = paymentMethod,
+        transactionId = transactionId,
         actionNote = actionNote,
         createdAtMillis = createdAtMillis
     )
