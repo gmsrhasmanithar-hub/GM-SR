@@ -7,6 +7,15 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
+import android.net.Uri
+import android.os.Bundle
+import android.os.CancellationSignal
+import android.os.ParcelFileDescriptor
+import android.print.PageRange
+import android.print.PrintAttributes
+import android.print.PrintDocumentAdapter
+import android.print.PrintDocumentInfo
+import android.print.PrintManager
 import androidx.core.content.FileProvider
 import com.example.model.Committee
 import com.example.model.CommitteeMember
@@ -18,6 +27,7 @@ import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.PayoutStatus
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -103,6 +113,76 @@ object PdfReportGenerator {
             true
         } catch (_: Exception) {
             false
+        }
+    }
+
+    fun savePdfToUri(context: Context, sourceFile: File, targetUri: Uri): Result<Unit> {
+        return try {
+            context.contentResolver.openOutputStream(targetUri)?.use { output ->
+                FileInputStream(sourceFile).use { input ->
+                    input.copyTo(output)
+                }
+            } ?: return Result.failure(IllegalStateException("Unable to open destination file."))
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun printPdf(context: Context, pdfFile: File, jobName: String): Result<Unit> {
+        return try {
+            val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
+                ?: return Result.failure(IllegalStateException("Print service unavailable on this device."))
+
+            val adapter = object : PrintDocumentAdapter() {
+                override fun onLayout(
+                    oldAttributes: PrintAttributes?,
+                    newAttributes: PrintAttributes?,
+                    cancellationSignal: CancellationSignal?,
+                    callback: LayoutResultCallback?,
+                    extras: Bundle?
+                ) {
+                    if (cancellationSignal?.isCanceled == true) {
+                        callback?.onLayoutCancelled()
+                        return
+                    }
+                    val info = PrintDocumentInfo.Builder(pdfFile.name)
+                        .setContentType(PrintDocumentInfo.CONTENT_TYPE_DOCUMENT)
+                        .setPageCount(PrintDocumentInfo.PAGE_COUNT_UNKNOWN)
+                        .build()
+                    callback?.onLayoutFinished(info, true)
+                }
+
+                override fun onWrite(
+                    pages: Array<out PageRange>?,
+                    destination: ParcelFileDescriptor?,
+                    cancellationSignal: CancellationSignal?,
+                    callback: WriteResultCallback?
+                ) {
+                    if (cancellationSignal?.isCanceled == true) {
+                        callback?.onWriteCancelled()
+                        return
+                    }
+                    if (destination == null) {
+                        callback?.onWriteFailed("Missing print destination.")
+                        return
+                    }
+                    try {
+                        FileInputStream(pdfFile).use { input ->
+                            FileOutputStream(destination.fileDescriptor).use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                        callback?.onWriteFinished(arrayOf(PageRange.ALL_PAGES))
+                    } catch (e: Exception) {
+                        callback?.onWriteFailed(e.localizedMessage ?: "Print write error")
+                    }
+                }
+            }
+            printManager.print(jobName, adapter, PrintAttributes.Builder().build())
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

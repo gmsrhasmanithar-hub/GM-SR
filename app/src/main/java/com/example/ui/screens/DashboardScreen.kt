@@ -20,24 +20,28 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EventAvailable
 import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.PendingActions
 import androidx.compose.material.icons.rounded.PersonAdd
-import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.SwapHoriz
-import androidx.compose.material.icons.rounded.Timer
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -48,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -60,16 +65,13 @@ import com.example.model.Committee
 import com.example.model.DashboardSummary
 import com.example.model.FormatUtils
 import com.example.model.MonthUtils
-import com.example.ui.components.CollectionDonutChart
 import com.example.ui.components.CommitteeStatusBadge
 import com.example.ui.components.EmptyCommitteePrompt
 import com.example.ui.components.KpiMetricCard
 import com.example.ui.components.MonthSelectorBar
-import com.example.ui.components.MonthlyCollectionBarChart
 import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.StatusPaidGreen
-import com.example.ui.theme.StatusPendingYellow
 import com.example.ui.theme.StatusUnpaidRed
 
 @Composable
@@ -81,11 +83,16 @@ fun DashboardScreen(
     onSelectMonth: (String) -> Unit,
     onOpenCommitteeSwitcher: () -> Unit,
     onCreateCommittee: () -> Unit,
+    onViewCommittee: (Committee) -> Unit,
     onEditCommittee: (Committee) -> Unit,
+    onDeleteCommittee: (Committee) -> Unit,
     onQuickAddMember: () -> Unit,
     onGoToInstallments: () -> Unit,
     onGoToReminders: () -> Unit,
-    onGoToReports: () -> Unit
+    onPrintSummary: () -> Unit,
+    onDownloadSummary: () -> Unit,
+    onOpenAuditHistory: () -> Unit,
+    onRefresh: () -> Unit
 ) {
     if (committee == null || summary == null) {
         Box(
@@ -97,25 +104,29 @@ fun DashboardScreen(
         return
     }
 
+    val progressRatio = if (summary.monthlyCollectionTarget > 0L) {
+        (summary.currentMonthCollected.toFloat() / summary.monthlyCollectionTarget.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Executive Hero Committee Card
+        // Simple Brand & Active Committee Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                shape = RoundedCornerShape(22.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
             ) {
                 Box(modifier = Modifier.fillMaxWidth()) {
                     Image(
                         painter = painterResource(id = R.drawable.img_gm_hero_banner),
-                        contentDescription = "GM HASMANI Banner",
+                        contentDescription = "GM HASMANI THAR Banner",
                         modifier = Modifier
                             .matchParentSize()
-                            .clip(RoundedCornerShape(24.dp)),
+                            .clip(RoundedCornerShape(22.dp)),
                         contentScale = ContentScale.Crop
                     )
                     Box(
@@ -123,17 +134,14 @@ fun DashboardScreen(
                             .matchParentSize()
                             .background(
                                 Brush.linearGradient(
-                                    colors = listOf(
-                                        Color(0xE6063D2B),
-                                        Color(0xCC0B6E4F)
-                                    )
+                                    colors = listOf(Color(0xEB063D2B), Color(0xD60B6E4F))
                                 )
                             )
                     )
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(18.dp),
+                            .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Row(
@@ -148,7 +156,7 @@ fun DashboardScreen(
                             ) {
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(34.dp)
                                 ) {
                                     Image(
                                         painter = painterResource(id = R.drawable.ic_gm_committee_fg),
@@ -171,27 +179,11 @@ fun DashboardScreen(
                                 }
                                 CommitteeStatusBadge(committee.statusEnum, strings)
                             }
-                            Row {
-                                IconButton(
-                                    onClick = { onEditCommittee(committee) },
-                                    modifier = Modifier.testTag("edit_committee_button")
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.Edit,
-                                        contentDescription = strings.editCommittee,
-                                        tint = Color.White
-                                    )
-                                }
-                                IconButton(
-                                    onClick = onOpenCommitteeSwitcher,
-                                    modifier = Modifier.testTag("switch_committee_button")
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.SwapHoriz,
-                                        contentDescription = strings.switchCommittee,
-                                        tint = Color.White
-                                    )
-                                }
+                            IconButton(
+                                onClick = onOpenCommitteeSwitcher,
+                                modifier = Modifier.testTag("switch_committee_button")
+                            ) {
+                                Icon(Icons.Rounded.SwapHoriz, contentDescription = strings.switchCommittee, tint = Color.White)
                             }
                         }
 
@@ -208,23 +200,22 @@ fun DashboardScreen(
                         Text(
                             text = "${committee.memberCount} Members • ${FormatUtils.formatPkr(committee.monthlyInstallment)}/mo • ${committee.totalMonths} Months",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.White.copy(alpha = 0.88f)
+                            color = Color.White.copy(alpha = 0.9f)
                         )
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column {
                                 Text(
                                     text = strings.monthlyCollection,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha = 0.78f)
+                                    color = Color.White.copy(alpha = 0.8f)
                                 )
                                 Text(
                                     text = FormatUtils.formatPkr(committee.monthlyCollectionTotal),
-                                    style = MaterialTheme.typography.titleLarge,
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = Color.White
                                 )
@@ -233,7 +224,7 @@ fun DashboardScreen(
                                 Text(
                                     text = strings.totalCommitteeAmount,
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = Color.White.copy(alpha = 0.78f)
+                                    color = Color.White.copy(alpha = 0.8f)
                                 )
                                 Text(
                                     text = FormatUtils.formatPkr(committee.totalCommitteeAmount),
@@ -241,6 +232,61 @@ fun DashboardScreen(
                                     fontWeight = FontWeight.Bold,
                                     color = GoldAccent
                                 )
+                            }
+                        }
+
+                        // Action row on committee card: View, Edit, Delete
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                onClick = { onViewCommittee(committee) },
+                                color = Color.White.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).testTag("view_committee_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Rounded.Visibility, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(strings.viewLabel, color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Surface(
+                                onClick = { onEditCommittee(committee) },
+                                color = Color.White.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).testTag("edit_committee_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Rounded.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(strings.editLabel, color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Surface(
+                                onClick = { onDeleteCommittee(committee) },
+                                color = Color(0x55DC2626),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).testTag("delete_committee_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Rounded.Delete, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(strings.deleteLabel, color = Color.White, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -258,65 +304,7 @@ fun DashboardScreen(
             )
         }
 
-        // Next Payout Spotlight
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f))
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Surface(
-                            color = GoldAccent,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Rounded.EventAvailable,
-                                    contentDescription = null,
-                                    tint = Color.White
-                                )
-                            }
-                        }
-                        Column {
-                            Text(
-                                text = strings.nextPayoutMember,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                            Text(
-                                text = summary.nextPayoutMember?.let {
-                                    "#${it.committeeNumber} • ${it.name}"
-                                } ?: "All Scheduled Payouts Completed",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "${strings.upcomingPayoutDate}: ${summary.upcomingPayoutDate}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        // KPI Grid (2 columns)
+        // Clean 2x2 Summary KPIs
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
@@ -324,19 +312,19 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     KpiMetricCard(
-                        title = strings.totalActiveCommittees,
-                        value = "${summary.totalActiveCommittees}",
-                        subtitle = committee.name,
-                        icon = Icons.Rounded.AccountBalanceWallet,
+                        title = strings.activeMembers,
+                        value = "${summary.activeMemberCount} / ${summary.targetMemberCount}",
+                        subtitle = "${strings.totalActiveCommittees}: ${summary.totalActiveCommittees}",
+                        icon = Icons.Rounded.Group,
                         accentColor = EmeraldPrimary,
                         modifier = Modifier.weight(1f)
                     )
                     KpiMetricCard(
-                        title = strings.activeMembers,
-                        value = "${summary.activeMemberCount} / ${summary.targetMemberCount}",
-                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} • ${strings.partialPaymentsLabel}: ${summary.partialMembersCount}",
-                        icon = Icons.Rounded.Group,
-                        accentColor = EmeraldPrimary,
+                        title = strings.nextPayoutMember,
+                        value = summary.nextPayoutMember?.let { "#${it.committeeNumber} ${it.name}" } ?: strings.completedLabel,
+                        subtitle = summary.upcomingPayoutDate,
+                        icon = Icons.Rounded.EventAvailable,
+                        accentColor = GoldAccent,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -348,7 +336,7 @@ fun DashboardScreen(
                     KpiMetricCard(
                         title = strings.totalCollected,
                         value = FormatUtils.formatPkr(summary.currentMonthCollected),
-                        subtitle = "All: ${FormatUtils.formatPkr(summary.totalCommitteeCollectedAllMonths)}",
+                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount}",
                         icon = Icons.Rounded.CheckCircle,
                         accentColor = StatusPaidGreen,
                         modifier = Modifier.weight(1f)
@@ -362,74 +350,55 @@ fun DashboardScreen(
                         modifier = Modifier.weight(1f)
                     )
                 }
+            }
+        }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+        // Simple Monthly Progress Bar
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    KpiMetricCard(
-                        title = strings.partialPaymentsLabel,
-                        value = "${summary.partialMembersCount}",
-                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} / ${summary.activeMemberCount}",
-                        icon = Icons.Rounded.Payments,
-                        accentColor = StatusPendingYellow,
-                        modifier = Modifier.weight(1f)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${strings.collectionProgress} • ${MonthUtils.formatMonthDisplay(summary.currentMonthKey)}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${(progressRatio * 100).toInt()}%",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = StatusPaidGreen
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { progressRatio },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(6.dp)),
+                        color = StatusPaidGreen,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
-                    KpiMetricCard(
-                        title = strings.currentMonth,
-                        value = "M${summary.currentMonthIndex} / ${summary.totalMonths}",
-                        subtitle = MonthUtils.formatMonthDisplay(summary.currentMonthKey),
-                        icon = Icons.Rounded.CalendarMonth,
-                        accentColor = EmeraldPrimary,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    KpiMetricCard(
-                        title = strings.completedPayouts,
-                        value = "${summary.completedPayouts} / ${summary.activeMemberCount.coerceAtLeast(summary.targetMemberCount)}",
-                        subtitle = FormatUtils.formatPkr(committee.eachPayoutAmount),
-                        icon = Icons.Rounded.AccountBalanceWallet,
-                        accentColor = GoldAccent,
-                        modifier = Modifier.weight(1f)
-                    )
-                    KpiMetricCard(
-                        title = strings.remainingMonths,
-                        value = "${summary.remainingMonths}",
-                        subtitle = "${strings.endMonthLabel}: ${MonthUtils.formatMonthDisplay(committee.endMonth)}",
-                        icon = Icons.Rounded.Timer,
-                        accentColor = StatusPendingYellow,
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        text = "${FormatUtils.formatPkr(summary.currentMonthCollected)} / ${FormatUtils.formatPkr(summary.monthlyCollectionTarget)} • ${strings.completedPayouts}: ${summary.completedPayouts}/${summary.totalMonths}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
         }
 
-        // Donut Progress Chart
-        item {
-            CollectionDonutChart(
-                collected = summary.currentMonthCollected,
-                target = summary.monthlyCollectionTarget,
-                paidMembers = summary.paidMembersCount,
-                partialMembers = summary.partialMembersCount,
-                unpaidMembers = summary.unpaidMembersCount,
-                strings = strings
-            )
-        }
-
-        // Monthly Bar Chart
-        item {
-            MonthlyCollectionBarChart(
-                points = summary.monthlyChartPoints,
-                title = strings.monthlyTrend
-            )
-        }
-
-        // Quick Actions
+        // Large Simple Action Buttons for Android Phone
         item {
             Text(
                 text = strings.quickActions,
@@ -437,78 +406,120 @@ fun DashboardScreen(
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Button(
+                    DashboardActionButton(
+                        label = strings.createNewCommittee,
+                        icon = Icons.Rounded.Add,
+                        primary = true,
+                        onClick = onCreateCommittee,
+                        modifier = Modifier.weight(1f).testTag("dashboard_new_committee_btn")
+                    )
+                    DashboardActionButton(
+                        label = strings.addMember,
+                        icon = Icons.Rounded.PersonAdd,
+                        primary = true,
                         onClick = onQuickAddMember,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .testTag("quick_add_member_btn"),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Rounded.PersonAdd, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(strings.addMember, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    FilledTonalButton(
-                        onClick = onGoToInstallments,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .testTag("quick_payments_btn"),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Rounded.Payments, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(strings.navInstallments, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+                        modifier = Modifier.weight(1f).testTag("quick_add_member_btn")
+                    )
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    OutlinedButton(
+                    DashboardActionButton(
+                        label = strings.navInstallments,
+                        icon = Icons.Rounded.Payments,
+                        tonal = true,
+                        onClick = onGoToInstallments,
+                        modifier = Modifier.weight(1f).testTag("quick_payments_btn")
+                    )
+                    DashboardActionButton(
+                        label = strings.navReminders,
+                        icon = Icons.Rounded.Sms,
+                        tonal = true,
                         onClick = onGoToReminders,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .testTag("quick_reminders_btn"),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Rounded.Sms, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(strings.navReminders, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    OutlinedButton(
-                        onClick = onGoToReports,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(50.dp)
-                            .testTag("quick_reports_btn"),
-                        shape = RoundedCornerShape(14.dp)
-                    ) {
-                        Icon(Icons.Rounded.PictureAsPdf, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("PDF & Archive", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
+                        modifier = Modifier.weight(1f).testTag("quick_reminders_btn")
+                    )
                 }
-                OutlinedButton(
-                    onClick = onCreateCommittee,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(48.dp)
-                        .testTag("dashboard_new_committee_btn"),
-                    shape = RoundedCornerShape(14.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(strings.createNewCommittee)
+                    DashboardActionButton(
+                        label = strings.printLabel,
+                        icon = Icons.Rounded.Print,
+                        onClick = onPrintSummary,
+                        modifier = Modifier.weight(1f).testTag("dashboard_print_btn")
+                    )
+                    DashboardActionButton(
+                        label = strings.downloadLabel,
+                        icon = Icons.Rounded.Download,
+                        onClick = onDownloadSummary,
+                        modifier = Modifier.weight(1f).testTag("dashboard_download_btn")
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    DashboardActionButton(
+                        label = strings.auditLogTitle,
+                        icon = Icons.Rounded.History,
+                        onClick = onOpenAuditHistory,
+                        modifier = Modifier.weight(1f).testTag("dashboard_audit_btn")
+                    )
+                    DashboardActionButton(
+                        label = strings.refreshLabel,
+                        icon = Icons.Rounded.Refresh,
+                        onClick = onRefresh,
+                        modifier = Modifier.weight(1f).testTag("dashboard_refresh_btn")
+                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DashboardActionButton(
+    label: String,
+    icon: ImageVector,
+    primary: Boolean = false,
+    tonal: Boolean = false,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    when {
+        primary -> Button(
+            onClick = onClick,
+            modifier = modifier.height(54.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+        }
+        tonal -> FilledTonalButton(
+            onClick = onClick,
+            modifier = modifier.height(54.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+        }
+        else -> OutlinedButton(
+            onClick = onClick,
+            modifier = modifier.height(54.dp),
+            shape = RoundedCornerShape(14.dp)
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
         }
     }
 }

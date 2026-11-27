@@ -1,5 +1,6 @@
 package com.example.model
 
+import java.security.MessageDigest
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -104,6 +105,75 @@ enum class DispatchStatus {
     companion object {
         fun fromRaw(raw: String?): DispatchStatus =
             entries.firstOrNull { it.name == raw } ?: OPENED_APP
+    }
+}
+
+enum class UserRole {
+    ADMIN, STAFF;
+
+    companion object {
+        fun fromRaw(raw: String?): UserRole =
+            entries.firstOrNull { it.name == raw } ?: STAFF
+    }
+}
+
+enum class UploadQueueStatus {
+    PENDING, COMPLETED, FAILED;
+
+    companion object {
+        fun fromRaw(raw: String?): UploadQueueStatus =
+            entries.firstOrNull { it.name == raw } ?: PENDING
+    }
+}
+
+data class LocalUser(
+    val id: String = "",
+    val username: String = "",
+    val displayName: String = "",
+    val passwordHash: String = "",
+    val role: String = UserRole.ADMIN.name,
+    val isActive: Boolean = true,
+    val createdAtMillis: Long = System.currentTimeMillis()
+) {
+    val roleEnum: UserRole get() = UserRole.fromRaw(role)
+    val isAdmin: Boolean get() = roleEnum == UserRole.ADMIN
+}
+
+data class AuditLogEntry(
+    val id: String = "",
+    val actorName: String = "",
+    val actionType: String = "",
+    val targetType: String = "",
+    val targetName: String = "",
+    val details: String = "",
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
+data class UploadQueueItem(
+    val id: String = "",
+    val title: String = "",
+    val payloadType: String = "",
+    val payloadJson: String = "",
+    val status: String = UploadQueueStatus.PENDING.name,
+    val errorMessage: String? = null,
+    val attempts: Int = 0,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+) {
+    val statusEnum: UploadQueueStatus get() = UploadQueueStatus.fromRaw(status)
+}
+
+data class UploadBatchSummary(
+    val attempted: Int,
+    val succeeded: Int,
+    val failed: Int,
+    val message: String
+)
+
+object PasswordHasher {
+    fun sha256(raw: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 }
 

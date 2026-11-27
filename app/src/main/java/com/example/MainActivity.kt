@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -24,22 +25,30 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Assessment
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Payments
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sms
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -62,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -75,6 +85,7 @@ import com.example.data.MessagingGateway
 import com.example.data.MessagingGatewayConfig
 import com.example.data.PdfReportType
 import com.example.i18n.AppLanguage
+import com.example.i18n.UiStrings
 import com.example.i18n.stringsFor
 import com.example.model.BackupPreview
 import com.example.model.BackupUtils
@@ -86,6 +97,11 @@ import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.PayoutStatus
 import com.example.model.ReminderStage
+import com.example.model.UploadQueueStatus
+import com.example.ui.components.AdminDeleteConfirmDialog
+import com.example.ui.components.AppSettingsDialog
+import com.example.ui.components.ChangePasswordDialog
+import com.example.ui.components.CommitteeDetailDialog
 import com.example.ui.components.CommitteeEditorDialog
 import com.example.ui.components.CommitteeSwitcherDialog
 import com.example.ui.components.MemberDetailDialog
@@ -94,23 +110,34 @@ import com.example.ui.components.MessagingGatewayConfigDialog
 import com.example.ui.components.PaymentActivityHistoryDialog
 import com.example.ui.components.RecordPaymentDialog
 import com.example.ui.components.RecordPayoutDialog
+import com.example.ui.components.UploadQueueDialog
+import com.example.ui.components.UserManagementDialog
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryReportsSettingsScreen
 import com.example.ui.screens.InstallmentsScreen
 import com.example.ui.screens.MembersAndPayoutsScreen
 import com.example.ui.screens.RemindersScreen
 import com.example.ui.theme.CommitteeManagerTheme
+import com.example.ui.theme.StatusUnpaidRed
 import com.example.viewmodel.CommitteeViewModel
 import com.example.viewmodel.UiState
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.io.File
 
 enum class MainTab(val icon: ImageVector, val testTag: String) {
     DASHBOARD(Icons.Rounded.Dashboard, "nav_dashboard"),
     MEMBERS(Icons.Rounded.Group, "nav_members"),
     INSTALLMENTS(Icons.Rounded.Payments, "nav_installments"),
     REMINDERS(Icons.Rounded.Sms, "nav_reminders"),
-    REPORTS(Icons.Rounded.Assessment, "nav_reports")
+    SETTINGS(Icons.Rounded.Settings, "nav_settings")
+}
+
+private sealed interface PendingDeleteTarget {
+    data class CommitteeTarget(val committee: Committee) : PendingDeleteTarget
+    data class MemberTarget(val member: CommitteeMember) : PendingDeleteTarget
+    data class InstallmentTarget(val record: InstallmentRecord) : PendingDeleteTarget
+    data class UnpaidMonthTarget(val monthKey: String) : PendingDeleteTarget
 }
 
 class MainActivity : ComponentActivity() {
@@ -156,6 +183,7 @@ fun MainFeatureShell(
     val membersState by viewModel.membersState.collectAsStateWithLifecycle()
     val installmentsState by viewModel.installmentsState.collectAsStateWithLifecycle()
     val paymentLogs by viewModel.paymentLogs.collectAsStateWithLifecycle()
+    val auditLogs by viewModel.auditLogs.collectAsStateWithLifecycle()
     val reminderLogs by viewModel.reminderLogs.collectAsStateWithLifecycle()
     val summary by viewModel.dashboardSummary.collectAsStateWithLifecycle()
     val selectedMonthKey by viewModel.selectedMonthKey.collectAsStateWithLifecycle()
@@ -164,6 +192,13 @@ fun MainFeatureShell(
     val gatewayConfig by viewModel.messagingConfig.collectAsStateWithLifecycle()
     val customTemplates by viewModel.customTemplates.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
+    val localUsers by viewModel.localUsers.collectAsStateWithLifecycle()
+    val currentUser by viewModel.currentUser.collectAsStateWithLifecycle()
+    val isLoggedOut by viewModel.isLoggedOut.collectAsStateWithLifecycle()
+    val isDefaultPinActive by viewModel.isDefaultPinActive.collectAsStateWithLifecycle()
+    val pendingUploads by viewModel.pendingUploads.collectAsStateWithLifecycle()
+    val completedUploads by viewModel.completedUploads.collectAsStateWithLifecycle()
+    val failedUploads by viewModel.failedUploads.collectAsStateWithLifecycle()
 
     val effectiveLang = when (gatewayConfig.localLanguageCode) {
         "ur" -> AppLanguage.UR
@@ -179,12 +214,13 @@ fun MainFeatureShell(
     }
 
     var currentTab by rememberSaveable { mutableStateOf(MainTab.DASHBOARD) }
-    if (currentTab != MainTab.DASHBOARD) {
+    if (currentTab != MainTab.DASHBOARD && !isLoggedOut) {
         BackHandler { currentTab = MainTab.DASHBOARD }
     }
 
     // Dialog states
     var showCreateCommittee by remember { mutableStateOf(false) }
+    var committeeToView by remember { mutableStateOf<Committee?>(null) }
     var committeeToEdit by remember { mutableStateOf<Committee?>(null) }
     var showCommitteeSwitcher by remember { mutableStateOf(false) }
     var showAddMember by remember { mutableStateOf(false) }
@@ -195,6 +231,34 @@ fun MainFeatureShell(
     var payoutTargetMember by remember { mutableStateOf<CommitteeMember?>(null) }
     var showActivityHistory by remember { mutableStateOf(false) }
     var pendingRestoreData by remember { mutableStateOf<Pair<String, BackupPreview>?>(null) }
+    var pendingDeleteTarget by remember { mutableStateOf<PendingDeleteTarget?>(null) }
+    var deleteErrorMsg by remember { mutableStateOf<String?>(null) }
+
+    // Simple Settings dialogs
+    var showAppSettings by remember { mutableStateOf(false) }
+    var showUserManagement by remember { mutableStateOf(false) }
+    var showChangePassword by remember { mutableStateOf(false) }
+    var uploadDialogStatus by remember { mutableStateOf<UploadQueueStatus?>(null) }
+    var markUploadsCompleteOnBackup by remember { mutableStateOf(false) }
+
+    // SAF PDF Download launcher
+    var pendingPdfFile by remember { mutableStateOf<File?>(null) }
+    val downloadPdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        val file = pendingPdfFile
+        pendingPdfFile = null
+        if (uri != null && file != null) {
+            viewModel.savePdfToUri(context, file, uri)
+        }
+    }
+
+    fun triggerDownloadPdf(reportType: PdfReportType, member: CommitteeMember? = null) {
+        viewModel.preparePdfForDownload(context, reportType, member) { generatedFile ->
+            pendingPdfFile = generatedFile
+            downloadPdfLauncher.launch(generatedFile.name)
+        }
+    }
 
     // SAF Backup Export / Restore launchers
     var pendingBackupJson by remember { mutableStateOf<String?>(null) }
@@ -202,13 +266,19 @@ fun MainFeatureShell(
         contract = ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
         val json = pendingBackupJson
+        val shouldMarkComplete = markUploadsCompleteOnBackup
         pendingBackupJson = null
+        markUploadsCompleteOnBackup = false
         if (uri != null && json != null) {
             try {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
                     out.write(json.toByteArray(Charsets.UTF_8))
                 }
-                scope.launch { snackbarHostState.showSnackbar("Backup exported successfully.") }
+                if (shouldMarkComplete) {
+                    viewModel.markQueueCompletedLocally()
+                } else {
+                    scope.launch { snackbarHostState.showSnackbar("Backup exported successfully.") }
+                }
             } catch (e: Exception) {
                 scope.launch { snackbarHostState.showSnackbar("Export failed: ${e.localizedMessage}") }
             }
@@ -234,6 +304,19 @@ fun MainFeatureShell(
         }
     }
 
+    fun startBackupExport(markQueueCompleted: Boolean = false) {
+        scope.launch {
+            val res = viewModel.exportBackupJson()
+            res.onSuccess { json ->
+                pendingBackupJson = json
+                markUploadsCompleteOnBackup = markQueueCompleted
+                exportBackupLauncher.launch("GM_HASMANI_Backup_${MonthUtils.todayDateString()}.json")
+            }.onFailure {
+                snackbarHostState.showSnackbar("Backup export failed.")
+            }
+        }
+    }
+
     val committees = (committeesState as? UiState.Success)?.data ?: emptyList()
     val members = (membersState as? UiState.Success)?.data ?: emptyList()
     val installments = (installmentsState as? UiState.Success)?.data ?: emptyList()
@@ -241,6 +324,23 @@ fun MainFeatureShell(
     val nextSuggestedNumber = remember(members) {
         val activeNums = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.map { it.committeeNumber }
         ((activeNums.maxOrNull() ?: 0L) + 1L)
+    }
+
+    if (isLoggedOut) {
+        LocalLoginScreen(
+            strings = strings,
+            showDefaultPinHint = isDefaultPinActive,
+            isBusy = isBusy,
+            onSignIn = { username, pin, onErr ->
+                viewModel.loginLocalUser(username, pin, onErr)
+            },
+            onLanguageToggle = {
+                val next = if (effectiveLang == AppLanguage.EN) AppLanguage.UR else AppLanguage.EN
+                viewModel.setLanguage(next)
+            },
+            currentLang = effectiveLang
+        )
+        return
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -252,6 +352,19 @@ fun MainFeatureShell(
             topBar = {
                 Column {
                     CenterAlignedTopAppBar(
+                        navigationIcon = {
+                            if (currentTab != MainTab.DASHBOARD) {
+                                IconButton(
+                                    onClick = { currentTab = MainTab.DASHBOARD },
+                                    modifier = Modifier.testTag("top_back_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                                        contentDescription = strings.backLabel
+                                    )
+                                }
+                            }
+                        },
                         title = {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -279,6 +392,15 @@ fun MainFeatureShell(
                             }
                         },
                         actions = {
+                            IconButton(
+                                onClick = { viewModel.refreshAll() },
+                                modifier = Modifier.testTag("top_refresh_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = strings.refreshLabel
+                                )
+                            }
                             FilterChip(
                                 selected = effectiveLang == AppLanguage.UR,
                                 onClick = {
@@ -371,23 +493,46 @@ fun MainFeatureShell(
                                         onSelectMonth = viewModel::selectMonth,
                                         onOpenCommitteeSwitcher = { showCommitteeSwitcher = true },
                                         onCreateCommittee = { showCreateCommittee = true },
+                                        onViewCommittee = { committeeToView = it },
                                         onEditCommittee = { committeeToEdit = it },
+                                        onDeleteCommittee = {
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.CommitteeTarget(it)
+                                        },
                                         onQuickAddMember = { showAddMember = true },
                                         onGoToInstallments = { currentTab = MainTab.INSTALLMENTS },
                                         onGoToReminders = { currentTab = MainTab.REMINDERS },
-                                        onGoToReports = { currentTab = MainTab.REPORTS }
+                                        onPrintSummary = { viewModel.printReport(context, PdfReportType.COMPLETE_SUMMARY) },
+                                        onDownloadSummary = { triggerDownloadPdf(PdfReportType.COMPLETE_SUMMARY) },
+                                        onOpenAuditHistory = { showActivityHistory = true },
+                                        onRefresh = { viewModel.refreshAll() }
                                     )
 
                                     MainTab.MEMBERS -> MembersAndPayoutsScreen(
                                         strings = strings,
+                                        committees = committees,
                                         committee = activeCommittee,
                                         members = members,
                                         searchQuery = memberSearchQuery,
                                         onSearchQueryChange = viewModel::setMemberSearchQuery,
+                                        onSelectCommittee = { c ->
+                                            viewModel.selectCommittee(c.id)
+                                        },
                                         onCreateCommittee = { showCreateCommittee = true },
+                                        onViewCommittee = { committeeToView = it },
+                                        onEditCommittee = { committeeToEdit = it },
+                                        onSetCommitteeStatus = { c, st -> viewModel.setCommitteeStatus(c.id, st) },
+                                        onDeleteCommittee = { c ->
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.CommitteeTarget(c)
+                                        },
                                         onAddMember = { showAddMember = true },
                                         onEditMember = { memberToEdit = it },
                                         onArchiveMember = viewModel::archiveMember,
+                                        onDeleteMember = { m ->
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.MemberTarget(m)
+                                        },
                                         onViewMemberDetail = { memberToDetail = it },
                                         onSwapOrder = viewModel::swapPayoutOrder,
                                         onRequestMarkPayoutPaid = { payoutTargetMember = it },
@@ -404,6 +549,10 @@ fun MainFeatureShell(
                                         onSelectMonth = viewModel::selectMonth,
                                         onSelectFilter = viewModel::setInstallmentFilter,
                                         onSyncMonth = viewModel::syncCurrentMonthInstallments,
+                                        onDeleteUnpaidMonth = { monthKey ->
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.UnpaidMonthTarget(monthKey)
+                                        },
                                         onQuickMarkPaid = { rec ->
                                             viewModel.recordPayment(
                                                 record = rec,
@@ -414,6 +563,10 @@ fun MainFeatureShell(
                                             )
                                         },
                                         onEditPayment = { installmentToEdit = it },
+                                        onDeleteInstallment = { rec ->
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.InstallmentTarget(rec)
+                                        },
                                         onQuickWhatsApp = { m, amt ->
                                             val tpl = if (effectiveLang == AppLanguage.UR) ReminderStage.FIRST_28.defaultTemplateUr
                                             else ReminderStage.FIRST_28.defaultTemplateEn
@@ -457,38 +610,39 @@ fun MainFeatureShell(
                                         onCreateCommittee = { showCreateCommittee = true }
                                     )
 
-                                    MainTab.REPORTS -> HistoryReportsSettingsScreen(
+                                    MainTab.SETTINGS -> HistoryReportsSettingsScreen(
                                         strings = strings,
-                                        language = effectiveLang,
-                                        committees = committees,
                                         activeCommittee = activeCommittee,
                                         members = members,
-                                        gatewayConfig = gatewayConfig,
-                                        onLanguageChange = viewModel::setLanguage,
-                                        onSelectCommittee = { c ->
-                                            viewModel.selectCommittee(c.id)
-                                            currentTab = MainTab.DASHBOARD
+                                        currentUser = currentUser,
+                                        pendingUploadCount = pendingUploads.size,
+                                        completedUploadCount = completedUploads.size,
+                                        failedUploadCount = failedUploads.size,
+                                        onViewPdf = { type, member ->
+                                            viewModel.generateAndOpenPdf(context, type, member, false)
                                         },
-                                        onCreateCommittee = { showCreateCommittee = true },
-                                        onSetCommitteeStatus = { c, st -> viewModel.setCommitteeStatus(c.id, st) },
-                                        onExportPdf = { type, member, share ->
-                                            viewModel.generateAndOpenPdf(context, type, member, share)
+                                        onPrintPdf = { type, member ->
+                                            viewModel.printReport(context, type, member)
                                         },
-                                        onExportBackupJson = {
-                                            scope.launch {
-                                                val res = viewModel.exportBackupJson()
-                                                res.onSuccess { json ->
-                                                    pendingBackupJson = json
-                                                    exportBackupLauncher.launch("GM_HASMANI_Backup_${MonthUtils.todayDateString()}.json")
-                                                }.onFailure {
-                                                    snackbarHostState.showSnackbar("Backup export failed.")
-                                                }
-                                            }
+                                        onDownloadPdf = { type, member ->
+                                            triggerDownloadPdf(type, member)
                                         },
+                                        onSharePdf = { type, member ->
+                                            viewModel.generateAndOpenPdf(context, type, member, true)
+                                        },
+                                        onOpenAppSettings = { showAppSettings = true },
+                                        onOpenUploadPending = { uploadDialogStatus = UploadQueueStatus.PENDING },
+                                        onOpenUploadCompleted = { uploadDialogStatus = UploadQueueStatus.COMPLETED },
+                                        onOpenFailedUploads = { uploadDialogStatus = UploadQueueStatus.FAILED },
+                                        onRetryUpload = { viewModel.retryUploads() },
+                                        onExportBackupJson = { startBackupExport(false) },
                                         onRestoreBackupJson = {
                                             restoreBackupLauncher.launch(arrayOf("application/json", "*/*"))
                                         },
-                                        onOpenGatewayConfig = { showGatewayConfig = true }
+                                        onOpenUserManagement = { showUserManagement = true },
+                                        onOpenChangePassword = { showChangePassword = true },
+                                        onOpenAuditLog = { showActivityHistory = true },
+                                        onLogout = { viewModel.logout() }
                                     )
                                 }
                             }
@@ -499,7 +653,10 @@ fun MainFeatureShell(
         }
     }
 
+    // -------------------------------------------------------------------------
     // Dialogs
+    // -------------------------------------------------------------------------
+
     if (showCreateCommittee) {
         CommitteeEditorDialog(
             strings = strings,
@@ -513,8 +670,34 @@ fun MainFeatureShell(
         )
     }
 
+    committeeToView?.let { viewing ->
+        val activeMemberCount = if (viewing.id == activeCommittee?.id) {
+            members.count { it.memberStatusEnum == MemberStatus.ACTIVE }
+        } else {
+            viewing.memberCount.toInt()
+        }
+        CommitteeDetailDialog(
+            strings = strings,
+            committee = viewing,
+            activeMemberCount = activeMemberCount,
+            onEdit = {
+                committeeToView = null
+                committeeToEdit = viewing
+            },
+            onPrint = {
+                viewModel.selectCommittee(viewing.id)
+                viewModel.printReport(context, PdfReportType.COMPLETE_SUMMARY)
+            },
+            onDownload = {
+                viewModel.selectCommittee(viewing.id)
+                triggerDownloadPdf(PdfReportType.COMPLETE_SUMMARY)
+            },
+            onDismiss = { committeeToView = null }
+        )
+    }
+
     committeeToEdit?.let { editing ->
-        val hasPayments = installments.any { it.paidAmount > 0L }
+        val hasPayments = editing.id == activeCommittee?.id && installments.any { it.paidAmount > 0L }
         CommitteeEditorDialog(
             strings = strings,
             existingCommittee = editing,
@@ -584,6 +767,9 @@ fun MainFeatureShell(
             onExportPdf = {
                 viewModel.generateAndOpenPdf(context, PdfReportType.INDIVIDUAL_HISTORY, m, false)
             },
+            onPrintPdf = {
+                viewModel.printReport(context, PdfReportType.INDIVIDUAL_HISTORY, m)
+            },
             onOpenWhatsApp = {
                 viewModel.launchManualDispatch(context, m, amt, true, ReminderStage.CUSTOM, tpl)
             },
@@ -599,6 +785,11 @@ fun MainFeatureShell(
             record = rec,
             logs = paymentLogs,
             onDismiss = { installmentToEdit = null },
+            onReversePayment = { reason ->
+                viewModel.reversePayment(rec, reason) {
+                    installmentToEdit = null
+                }
+            },
             onSave = { paidAmount, status, paymentDate, note ->
                 viewModel.recordPayment(rec, paidAmount, status, paymentDate, note)
                 installmentToEdit = null
@@ -625,7 +816,58 @@ fun MainFeatureShell(
         PaymentActivityHistoryDialog(
             strings = strings,
             logs = paymentLogs,
+            auditLogs = auditLogs,
             onDismiss = { showActivityHistory = false }
+        )
+    }
+
+    pendingDeleteTarget?.let { target ->
+        val (title, body) = when (target) {
+            is PendingDeleteTarget.CommitteeTarget ->
+                strings.deleteCommitteeLabel to
+                    "Delete \"${target.committee.name}\"? Committees with recorded payments or payouts are protected and should be archived instead."
+            is PendingDeleteTarget.MemberTarget ->
+                strings.deleteMember to
+                    "Delete member #${target.member.committeeNumber} ${target.member.name}? Members with recorded payments or payouts are protected."
+            is PendingDeleteTarget.InstallmentTarget ->
+                strings.deleteLabel to
+                    "Remove unpaid installment entry for ${target.record.memberName} (${MonthUtils.formatMonthDisplay(target.record.monthKey)})?"
+            is PendingDeleteTarget.UnpaidMonthTarget ->
+                strings.deleteUnpaidMonthLabel to
+                    "Delete all unpaid installment entries for ${MonthUtils.formatMonthDisplay(target.monthKey)}? Any recorded paid/partial entries will be preserved."
+        }
+
+        AdminDeleteConfirmDialog(
+            strings = strings,
+            title = title,
+            message = body,
+            currentUser = currentUser,
+            showDefaultPinHint = isDefaultPinActive,
+            errorMessage = deleteErrorMsg,
+            onDismiss = {
+                pendingDeleteTarget = null
+                deleteErrorMsg = null
+            },
+            onConfirmDelete = { pin ->
+                when (target) {
+                    is PendingDeleteTarget.CommitteeTarget ->
+                        viewModel.deleteCommittee(target.committee, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
+                    is PendingDeleteTarget.MemberTarget ->
+                        viewModel.deleteMember(target.member, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
+                    is PendingDeleteTarget.InstallmentTarget ->
+                        viewModel.deleteInstallment(target.record, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
+                    is PendingDeleteTarget.UnpaidMonthTarget ->
+                        viewModel.deleteUnpaidMonthEntries(target.monthKey, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
+                }
+            }
         )
     }
 
@@ -646,7 +888,7 @@ fun MainFeatureShell(
                 }
             },
             confirmButton = {
-                androidx.compose.material3.Button(
+                Button(
                     onClick = {
                         viewModel.restoreBackupJson(json)
                         pendingRestoreData = null
@@ -664,6 +906,21 @@ fun MainFeatureShell(
         )
     }
 
+    if (showAppSettings) {
+        AppSettingsDialog(
+            strings = strings,
+            language = effectiveLang,
+            gatewayConfig = gatewayConfig,
+            onLanguageChange = viewModel::setLanguage,
+            onSaveSyncUrl = viewModel::saveSyncWebhookUrl,
+            onOpenMessagingGateway = {
+                showAppSettings = false
+                showGatewayConfig = true
+            },
+            onDismiss = { showAppSettings = false }
+        )
+    }
+
     if (showGatewayConfig) {
         MessagingGatewayConfigDialog(
             strings = strings,
@@ -675,12 +932,157 @@ fun MainFeatureShell(
             }
         )
     }
+
+    uploadDialogStatus?.let { status ->
+        val (title, items) = when (status) {
+            UploadQueueStatus.PENDING -> strings.uploadPendingTitle to pendingUploads
+            UploadQueueStatus.COMPLETED -> strings.uploadCompletedTitle to completedUploads
+            UploadQueueStatus.FAILED -> strings.failedUploadsTitle to failedUploads
+        }
+        UploadQueueDialog(
+            strings = strings,
+            title = title,
+            items = items,
+            filterStatus = status,
+            onRetryAll = { viewModel.retryUploads() },
+            onExportAndCompleteLocal = {
+                uploadDialogStatus = null
+                startBackupExport(markQueueCompleted = true)
+            },
+            onClearCompleted = { viewModel.clearCompletedUploads() },
+            onDismiss = { uploadDialogStatus = null }
+        )
+    }
+
+    if (showUserManagement) {
+        UserManagementDialog(
+            strings = strings,
+            users = localUsers,
+            currentUser = currentUser,
+            onDismiss = { showUserManagement = false },
+            onCreateUser = { uname, dname, pass, role, onErr ->
+                viewModel.createUser(uname, dname, pass, role) { ok, err ->
+                    if (!ok && err != null) onErr(err)
+                }
+            },
+            onUpdateUser = viewModel::updateUserRoleAndActive,
+            onDeleteUser = viewModel::deleteUser
+        )
+    }
+
+    if (showChangePassword) {
+        ChangePasswordDialog(
+            strings = strings,
+            currentUser = currentUser,
+            showDefaultPinHint = isDefaultPinActive,
+            onDismiss = { showChangePassword = false },
+            onSubmit = { curr, newPass, onErr ->
+                viewModel.changePassword(curr, newPass) { ok, err ->
+                    if (ok) showChangePassword = false else if (err != null) onErr(err)
+                }
+            }
+        )
+    }
 }
 
-private fun tabLabel(tab: MainTab, strings: com.example.i18n.UiStrings): String = when (tab) {
+@Composable
+private fun LocalLoginScreen(
+    strings: UiStrings,
+    showDefaultPinHint: Boolean,
+    isBusy: Boolean,
+    onSignIn: (username: String, pin: String, onError: (String) -> Unit) -> Unit,
+    onLanguageToggle: () -> Unit,
+    currentLang: AppLanguage
+) {
+    var username by remember { mutableStateOf("admin") }
+    var password by remember { mutableStateOf("") }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(20.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Card(
+                modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        FilterChip(
+                            selected = currentLang == AppLanguage.UR,
+                            onClick = onLanguageToggle,
+                            label = { Text(if (currentLang == AppLanguage.EN) "اردو" else "EN") }
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.size(64.dp)
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_gm_committee_fg),
+                            contentDescription = "GM HASMANI Logo",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Text(strings.loginTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    if (showDefaultPinHint) {
+                        Text(
+                            text = "Default: admin / 1234",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it; errorMsg = null },
+                        label = { Text(strings.usernameLabel) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("login_username_input")
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it; errorMsg = null },
+                        label = { Text(strings.passwordPinLabel) },
+                        visualTransformation = PasswordVisualTransformation(),
+                        leadingIcon = { Icon(Icons.Rounded.Lock, contentDescription = null) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("login_password_input")
+                    )
+                    if (!errorMsg.isNullOrBlank()) {
+                        Text(errorMsg ?: "", color = StatusUnpaidRed, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Button(
+                        onClick = { onSignIn(username, password) { errorMsg = it } },
+                        enabled = !isBusy && username.isNotBlank() && password.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("login_submit_button"),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Text(strings.loginButton, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun tabLabel(tab: MainTab, strings: UiStrings): String = when (tab) {
     MainTab.DASHBOARD -> strings.navDashboard
     MainTab.MEMBERS -> strings.navMembers
     MainTab.INSTALLMENTS -> strings.navInstallments
     MainTab.REMINDERS -> strings.navReminders
-    MainTab.REPORTS -> strings.navReports
+    MainTab.SETTINGS -> strings.navReports
 }

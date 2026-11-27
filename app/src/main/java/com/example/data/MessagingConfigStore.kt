@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -19,13 +20,17 @@ data class MessagingGatewayConfig(
     val smsGatewayUrl: String = "",
     val smsGatewayApiKey: String = "",
     val smsSenderId: String = "GM HASMANI",
-    val localLanguageCode: String = "en"
+    val localLanguageCode: String = "en",
+    val syncWebhookUrl: String = ""
 ) {
     val isWhatsAppApiConfigured: Boolean
         get() = whatsappPhoneNumberId.isNotBlank() && whatsappAccessToken.isNotBlank()
 
     val isSmsGatewayConfigured: Boolean
         get() = smsGatewayUrl.isNotBlank()
+
+    val isSyncWebhookConfigured: Boolean
+        get() = syncWebhookUrl.isNotBlank()
 }
 
 class MessagingConfigStore(private val context: Context) {
@@ -38,12 +43,23 @@ class MessagingConfigStore(private val context: Context) {
         val SMS_SENDER_ID = stringPreferencesKey("sms_sender_id")
         val LANGUAGE = stringPreferencesKey("app_language")
         val ACTIVE_COMMITTEE_ID = stringPreferencesKey("active_committee_id")
+        val CURRENT_USER_ID = stringPreferencesKey("current_user_id")
+        val IS_LOGGED_OUT = booleanPreferencesKey("is_logged_out")
+        val SYNC_WEBHOOK_URL = stringPreferencesKey("sync_webhook_url")
         fun templateKey(stage: ReminderStage, lang: AppLanguage) =
             stringPreferencesKey("tpl_${stage.name}_${lang.code}")
     }
 
     val activeCommitteeIdFlow: Flow<String?> = context.messagingDataStore.data.map { prefs ->
         prefs[Keys.ACTIVE_COMMITTEE_ID]?.takeIf { it.isNotBlank() }
+    }
+
+    val currentUserIdFlow: Flow<String?> = context.messagingDataStore.data.map { prefs ->
+        prefs[Keys.CURRENT_USER_ID]?.takeIf { it.isNotBlank() }
+    }
+
+    val isLoggedOutFlow: Flow<Boolean> = context.messagingDataStore.data.map { prefs ->
+        prefs[Keys.IS_LOGGED_OUT] ?: false
     }
 
     val configFlow: Flow<MessagingGatewayConfig> = context.messagingDataStore.data.map { prefs ->
@@ -53,7 +69,8 @@ class MessagingConfigStore(private val context: Context) {
             smsGatewayUrl = prefs[Keys.SMS_GATEWAY_URL] ?: "",
             smsGatewayApiKey = prefs[Keys.SMS_GATEWAY_API_KEY] ?: "",
             smsSenderId = prefs[Keys.SMS_SENDER_ID] ?: "GM HASMANI",
-            localLanguageCode = prefs[Keys.LANGUAGE] ?: "en"
+            localLanguageCode = prefs[Keys.LANGUAGE] ?: "en",
+            syncWebhookUrl = prefs[Keys.SYNC_WEBHOOK_URL] ?: ""
         )
     }
 
@@ -78,6 +95,21 @@ class MessagingConfigStore(private val context: Context) {
             } else {
                 prefs[Keys.ACTIVE_COMMITTEE_ID] = committeeId
             }
+        }
+    }
+
+    suspend fun saveSession(userId: String?, isLoggedOut: Boolean) {
+        context.messagingDataStore.edit { prefs ->
+            if (userId != null) {
+                prefs[Keys.CURRENT_USER_ID] = userId
+            }
+            prefs[Keys.IS_LOGGED_OUT] = isLoggedOut
+        }
+    }
+
+    suspend fun saveSyncWebhookUrl(url: String) {
+        context.messagingDataStore.edit { prefs ->
+            prefs[Keys.SYNC_WEBHOOK_URL] = url.trim()
         }
     }
 

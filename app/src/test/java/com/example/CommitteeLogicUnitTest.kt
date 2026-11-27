@@ -96,7 +96,6 @@ class CommitteeLogicUnitTest {
         assertNotNull(numConflict)
         assertEquals(DuplicateConflictType.COMMITTEE_NUMBER, numConflict?.type)
 
-        // Editing self or reusing archived slot should pass
         assertNull(
             CommitteeUtils.findDuplicateMember(
                 members = listOf(m1, archived),
@@ -106,4 +105,34 @@ class CommitteeLogicUnitTest {
             )
         )
     }
+
+    @Test
+    fun `password hashing and admin role authorization work deterministically`() {
+        val hash1 = com.example.model.PasswordHasher.sha256("1234")
+        val hash2 = com.example.model.PasswordHasher.sha256("1234")
+        val hashDiff = com.example.model.PasswordHasher.sha256("5678")
+        assertEquals(64, hash1.length)
+        assertEquals(hash1, hash2)
+        assertTrue(hash1 != hashDiff)
+
+        val admin = com.example.model.LocalUser(
+            id = "u1",
+            username = "admin",
+            displayName = "Admin",
+            passwordHash = hash1,
+            role = com.example.model.UserRole.ADMIN.name
+        )
+        val staff = com.example.model.LocalUser(
+            id = "u2",
+            username = "staff",
+            displayName = "Staff",
+            passwordHash = hashDiff,
+            role = com.example.model.UserRole.STAFF.name
+        )
+        assertTrue(admin.isAdmin)
+        assertTrue(!staff.isAdmin)
+        assertEquals(com.example.model.UploadQueueStatus.FAILED, com.example.model.UploadQueueStatus.fromRaw("FAILED"))
+        assertEquals(com.example.model.UploadQueueStatus.PENDING, com.example.model.UploadQueueStatus.fromRaw("unknown"))
+    }
 }
+

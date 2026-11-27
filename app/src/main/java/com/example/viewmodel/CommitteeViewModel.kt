@@ -1,6 +1,7 @@
 package com.example.viewmodel
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,6 +13,7 @@ import com.example.data.MessagingGatewayConfig
 import com.example.data.PdfReportGenerator
 import com.example.data.PdfReportType
 import com.example.i18n.AppLanguage
+import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
@@ -21,14 +23,19 @@ import com.example.model.DispatchStatus
 import com.example.model.DuplicateConflictType
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
+import com.example.model.LocalUser
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.MonthlyChartPoint
+import com.example.model.PasswordHasher
 import com.example.model.PaymentHistoryLog
 import com.example.model.PayoutStatus
 import com.example.model.ReminderChannel
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
+import com.example.model.UploadQueueItem
+import com.example.model.UploadQueueStatus
+import com.example.model.UserRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -44,6 +51,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -62,7 +70,7 @@ class CommitteeViewModel(
     private val gateway: MessagingGateway
 ) : ViewModel() {
 
-    private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 10)
     val snackbarEvents = _snackbarEvents.asSharedFlow()
 
     private val _selectedCommitteeId = MutableStateFlow<String?>(null)
@@ -78,11 +86,56 @@ class CommitteeViewModel(
     private val _isBusy = MutableStateFlow(false)
     val isBusy: StateFlow<Boolean> = _isBusy.asStateFlow()
 
+    // Tracks (committeeId, monthKey) intentionally deleted by Admin so auto-sync does not recreate it immediately
+    private val _skipAutoSyncMonths = MutableStateFlow<Set<Pair<String, String>>>(emptySet())
+
     val messagingConfig: StateFlow<MessagingGatewayConfig> = configStore.configFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), MessagingGatewayConfig())
 
     val customTemplates: StateFlow<Map<Pair<ReminderStage, AppLanguage>, String>> = configStore.templatesFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyMap())
+
+    val localUsers: StateFlow<List<LocalUser>> = repository.observeUsers()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val isLoggedOut: StateFlow<Boolean> = configStore.isLoggedOutFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), false)
+
+    val currentUser: StateFlow<LocalUser?> = combine(
+        localUsers,
+        configStore.currentUserIdFlow
+    ) { users, savedId ->
+        val chosen = if (!savedId.isNullOrBlank()) users.firstOrNull { it.id == savedId } else null
+        chosen
+            ?: users.firstOrNull { it.id == CommitteeRepository.DEFAULT_ADMIN_ID }
+            ?: users.firstOrNull { it.isAdmin && it.isActive }
+            ?: users.firstOrNull()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
+    val isDefaultPinActive: StateFlow<Boolean> = currentUser.map { user ->
+        user != null && user.passwordHash == PasswordHasher.sha256(CommitteeRepository.DEFAULT_ADMIN_PIN)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), true)
+
+    val auditLogs: StateFlow<List<AuditLogEntry>> = repository.observeAuditLogs()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val uploadQueue: StateFlow<List<UploadQueueItem>> = repository.observeUploadQueue()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val pendingUploads: StateFlow<List<UploadQueueItem>> = uploadQueue
+        .map { list -> list.filter { it.statusEnum == UploadQueueStatus.PENDING } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val completedUploads: StateFlow<List<UploadQueueItem>> = uploadQueue
+        .map { list -> list.filter { it.statusEnum == UploadQueueStatus.COMPLETED } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val failedUploads: StateFlow<List<UploadQueueItem>> = uploadQueue
+        .map { list -> list.filter { it.statusEnum == UploadQueueStatus.FAILED } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val committeesState: StateFlow<UiState<List<Committee>>> = repository.observeCommittees()
         .map<List<Committee>, UiState<List<Committee>>> { UiState.Success(it) }
@@ -165,6 +218,13 @@ class CommitteeViewModel(
 
     init {
         viewModelScope.launch {
+            val admin = repository.ensureDefaultAdmin()
+            if (currentUser.value == null) {
+                configStore.saveSession(admin.id, isLoggedOut = false)
+            }
+        }
+
+        viewModelScope.launch {
             activeCommittee.collect { committee ->
                 if (committee != null) {
                     val months = MonthUtils.monthKeysForCommittee(committee.startMonth, committee.totalMonths.toInt())
@@ -176,16 +236,17 @@ class CommitteeViewModel(
             }
         }
 
-        // Automatically generate missing installment rows for active members in the selected month
-        // so the Payments screen is immediately ready without extra manual steps.
         viewModelScope.launch {
             combine(
                 activeCommittee,
                 membersState,
                 installmentsState,
-                _selectedMonthKey
-            ) { committee, mState, iState, monthKey ->
+                _selectedMonthKey,
+                _skipAutoSyncMonths
+            ) { committee, mState, iState, monthKey, skipped ->
                 if (committee == null || mState !is UiState.Success || iState !is UiState.Success) {
+                    null
+                } else if ((committee.id to monthKey) in skipped) {
                     null
                 } else {
                     val activeMembers = mState.data.filter { it.memberStatusEnum == MemberStatus.ACTIVE }
@@ -207,6 +268,8 @@ class CommitteeViewModel(
             }
         }
     }
+
+    private fun actorName(): String = currentUser.value?.displayName ?: "Admin"
 
     private fun computeSummary(
         totalActiveCommittees: Int,
@@ -308,6 +371,32 @@ class CommitteeViewModel(
         }
     }
 
+    fun refreshAll() {
+        val committee = activeCommittee.value
+        val members = (membersState.value as? UiState.Success)?.data
+            ?.filter { it.memberStatusEnum == MemberStatus.ACTIVE }
+            ?: emptyList()
+        val existing = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
+
+        viewModelScope.launch {
+            _isBusy.value = true
+            repository.ensureDefaultAdmin()
+            if (committee != null && members.isNotEmpty()) {
+                val monthKey = _selectedMonthKey.value
+                _skipAutoSyncMonths.update { it - (committee.id to monthKey) }
+                val monthKeys = MonthUtils.monthKeysForCommittee(committee.startMonth, committee.totalMonths.toInt())
+                val monthIndex = (monthKeys.indexOf(monthKey) + 1).coerceAtLeast(1)
+                repository.syncInstallmentsForMonth(committee, members, existing, monthKey, monthIndex)
+            }
+            _isBusy.value = false
+            _snackbarEvents.tryEmit("Data refreshed.")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Committee Actions
+    // -------------------------------------------------------------------------
+
     fun createCommittee(
         name: String,
         memberCount: Long,
@@ -323,7 +412,7 @@ class CommitteeViewModel(
             _isBusy.value = true
             val res = repository.createCommittee(
                 name, memberCount, monthlyInstallment, totalMonths,
-                collectionDayStart, collectionDayEnd, payoutDay, startMonth, notes
+                collectionDayStart, collectionDayEnd, payoutDay, startMonth, notes, actorName()
             )
             _isBusy.value = false
             res.onSuccess { newId ->
@@ -353,7 +442,7 @@ class CommitteeViewModel(
             _isBusy.value = true
             val res = repository.updateCommitteeWithFutureRecalculation(
                 existing, newName, newMemberCount, newMonthlyInstallment, newTotalMonths,
-                newCollectionDayStart, newCollectionDayEnd, newPayoutDay, newStartMonth, newNotes
+                newCollectionDayStart, newCollectionDayEnd, newPayoutDay, newStartMonth, newNotes, actorName()
             )
             _isBusy.value = false
             res.onSuccess {
@@ -366,11 +455,39 @@ class CommitteeViewModel(
 
     fun setCommitteeStatus(committeeId: String, status: CommitteeStatus) {
         viewModelScope.launch {
-            repository.updateCommitteeStatus(committeeId, status)
+            repository.updateCommitteeStatus(committeeId, status, actorName())
                 .onSuccess { _snackbarEvents.tryEmit("Committee marked as ${status.name}.") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update status.") }
         }
     }
+
+    fun deleteCommittee(
+        committee: Committee,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.deleteCommitteeSafely(committee, currentUser.value, adminPassword)
+            _isBusy.value = false
+            res.onSuccess {
+                if (_selectedCommitteeId.value == committee.id) {
+                    _selectedCommitteeId.value = null
+                    configStore.saveActiveCommitteeId(null)
+                }
+                _snackbarEvents.tryEmit("Committee \"${committee.name}\" deleted.")
+                onResult(true, null)
+            }.onFailure {
+                val msg = it.localizedMessage ?: "Could not delete committee."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Member & Payout Actions
+    // -------------------------------------------------------------------------
 
     fun addMember(name: String, phone: String, committeeNumber: Long) {
         val committee = activeCommittee.value ?: return
@@ -388,7 +505,7 @@ class CommitteeViewModel(
         }
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.addMember(committee, name, phone, committeeNumber)
+            val res = repository.addMember(committee, name, phone, committeeNumber, actorName())
             _isBusy.value = false
             res.onSuccess {
                 _snackbarEvents.tryEmit("Member \"$name\" added (#$committeeNumber).")
@@ -418,7 +535,7 @@ class CommitteeViewModel(
             return
         }
         viewModelScope.launch {
-            repository.updateMember(committee, member, newName, newPhone, newCommitteeNumber)
+            repository.updateMember(committee, member, newName, newPhone, newCommitteeNumber, actorName())
                 .onSuccess { _snackbarEvents.tryEmit("Member updated.") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update member.") }
         }
@@ -427,16 +544,36 @@ class CommitteeViewModel(
     fun archiveMember(member: CommitteeMember) {
         val committee = activeCommittee.value ?: return
         viewModelScope.launch {
-            repository.archiveMember(committee.id, member.id)
+            repository.archiveMember(committee.id, member, actorName())
                 .onSuccess { _snackbarEvents.tryEmit("${member.name} archived (history preserved).") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to archive member.") }
+        }
+    }
+
+    fun deleteMember(
+        member: CommitteeMember,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.deleteMemberSafely(member, currentUser.value, adminPassword)
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Member \"${member.name}\" deleted.")
+                onResult(true, null)
+            }.onFailure {
+                val msg = it.localizedMessage ?: "Could not delete member."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
         }
     }
 
     fun swapPayoutOrder(first: CommitteeMember, second: CommitteeMember) {
         val committee = activeCommittee.value ?: return
         viewModelScope.launch {
-            repository.swapMemberPayoutOrder(committee, first, second)
+            repository.swapMemberPayoutOrder(committee, first, second, actorName())
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to reorder payout.") }
         }
     }
@@ -449,11 +586,15 @@ class CommitteeViewModel(
     ) {
         val committee = activeCommittee.value ?: return
         viewModelScope.launch {
-            repository.updateMemberPayoutStatus(committee, member, status, date, payoutAmount)
+            repository.updateMemberPayoutStatus(committee, member, status, date, payoutAmount, actorName())
                 .onSuccess { _snackbarEvents.tryEmit("Payout for ${member.name}: ${status.name}") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update payout.") }
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Installment & Safe Reversal / Delete Actions
+    // -------------------------------------------------------------------------
 
     fun syncCurrentMonthInstallments() {
         val committee = activeCommittee.value ?: return
@@ -469,6 +610,7 @@ class CommitteeViewModel(
         val monthKey = _selectedMonthKey.value
         val monthIndex = (monthKeys.indexOf(monthKey) + 1).coerceAtLeast(1)
 
+        _skipAutoSyncMonths.update { it - (committee.id to monthKey) }
         viewModelScope.launch {
             _isBusy.value = true
             val res = repository.syncInstallmentsForMonth(committee, members, existing, monthKey, monthIndex)
@@ -497,7 +639,8 @@ class CommitteeViewModel(
                 newPaidAmount = paidAmount,
                 newStatus = status,
                 paymentDate = paymentDate,
-                paymentNote = note
+                paymentNote = note,
+                actorName = actorName()
             ).onSuccess {
                 _snackbarEvents.tryEmit("Saved ${record.memberName}: ${status.name}")
             }.onFailure {
@@ -505,6 +648,195 @@ class CommitteeViewModel(
             }
         }
     }
+
+    fun reversePayment(
+        record: InstallmentRecord,
+        reason: String,
+        onComplete: () -> Unit
+    ) {
+        val committee = activeCommittee.value ?: return
+        viewModelScope.launch {
+            repository.reverseInstallmentPayment(committee.id, record, reason, actorName())
+                .onSuccess {
+                    _snackbarEvents.tryEmit("Payment reversed for ${record.memberName} (audit saved).")
+                    onComplete()
+                }
+                .onFailure {
+                    _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to reverse payment.")
+                }
+        }
+    }
+
+    fun deleteInstallment(
+        record: InstallmentRecord,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _skipAutoSyncMonths.update { it + (record.committeeId to record.monthKey) }
+            val res = repository.deleteInstallmentSafely(record, currentUser.value, adminPassword)
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Unpaid entry for ${record.memberName} deleted.")
+                onResult(true, null)
+            }.onFailure {
+                _skipAutoSyncMonths.update { set -> set - (record.committeeId to record.monthKey) }
+                val msg = it.localizedMessage ?: "Could not delete installment."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    fun deleteUnpaidMonthEntries(
+        monthKey: String,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val committee = activeCommittee.value ?: return
+        viewModelScope.launch {
+            _isBusy.value = true
+            _skipAutoSyncMonths.update { it + (committee.id to monthKey) }
+            val res = repository.deleteUnpaidMonthEntriesSafely(committee, monthKey, currentUser.value, adminPassword)
+            _isBusy.value = false
+            res.onSuccess { (deleted, preservedPaid) ->
+                val summaryMsg = "Deleted $deleted unpaid entries for ${MonthUtils.formatMonthDisplay(monthKey)}" +
+                    if (preservedPaid > 0) " ($preservedPaid paid kept)." else "."
+                _snackbarEvents.tryEmit(summaryMsg)
+                onResult(true, null)
+            }.onFailure {
+                _skipAutoSyncMonths.update { set -> set - (committee.id to monthKey) }
+                val msg = it.localizedMessage ?: "Could not delete month entries."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Local User / Password / Session / Settings Actions
+    // -------------------------------------------------------------------------
+
+    fun loginLocalUser(username: String, password: String, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.authenticateUser(username, password)
+            _isBusy.value = false
+            res.onSuccess { user ->
+                configStore.saveSession(user.id, isLoggedOut = false)
+                _snackbarEvents.tryEmit("Welcome, ${user.displayName}")
+            }.onFailure {
+                onError(it.localizedMessage ?: "Login failed")
+            }
+        }
+    }
+
+    fun logout() {
+        viewModelScope.launch {
+            configStore.saveSession(currentUser.value?.id, isLoggedOut = true)
+            _snackbarEvents.tryEmit("Logged out.")
+        }
+    }
+
+    fun changePassword(
+        currentPassword: String,
+        newPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        val uid = currentUser.value?.id ?: CommitteeRepository.DEFAULT_ADMIN_ID
+        viewModelScope.launch {
+            val res = repository.changePassword(uid, currentPassword, newPassword)
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Password / PIN updated.")
+                onResult(true, null)
+            }.onFailure {
+                onResult(false, it.localizedMessage ?: "Could not change password.")
+            }
+        }
+    }
+
+    fun createUser(
+        username: String,
+        displayName: String,
+        password: String,
+        role: UserRole,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        if (currentUser.value?.isAdmin != true) {
+            onResult(false, "Only Admin users can create users.")
+            return
+        }
+        viewModelScope.launch {
+            val res = repository.createUser(username, displayName, password, role, actorName())
+            res.onSuccess {
+                _snackbarEvents.tryEmit("User \"$displayName\" added.")
+                onResult(true, null)
+            }.onFailure {
+                onResult(false, it.localizedMessage ?: "Failed to create user.")
+            }
+        }
+    }
+
+    fun updateUserRoleAndActive(target: LocalUser, newRole: UserRole, isActive: Boolean) {
+        if (currentUser.value?.isAdmin != true) {
+            _snackbarEvents.tryEmit("Only Admin users can modify users.")
+            return
+        }
+        viewModelScope.launch {
+            repository.updateUserRoleAndActive(target, newRole, isActive, actorName())
+                .onSuccess { _snackbarEvents.tryEmit("Updated ${target.displayName}.") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update user.") }
+        }
+    }
+
+    fun deleteUser(target: LocalUser) {
+        if (currentUser.value?.isAdmin != true) {
+            _snackbarEvents.tryEmit("Only Admin users can delete users.")
+            return
+        }
+        viewModelScope.launch {
+            repository.deleteUser(target, currentUser.value?.id, actorName())
+                .onSuccess { _snackbarEvents.tryEmit("Deleted user ${target.displayName}.") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to delete user.") }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Upload Queue Actions
+    // -------------------------------------------------------------------------
+
+    fun saveSyncWebhookUrl(url: String) {
+        viewModelScope.launch {
+            configStore.saveSyncWebhookUrl(url)
+            _snackbarEvents.tryEmit("Sync settings saved.")
+        }
+    }
+
+    fun retryUploads() {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val summary = repository.retryPendingAndFailedUploads(messagingConfig.value.syncWebhookUrl, actorName())
+            _isBusy.value = false
+            _snackbarEvents.tryEmit(summary.message)
+        }
+    }
+
+    fun markQueueCompletedLocally() {
+        viewModelScope.launch {
+            val count = repository.markAllRetryableUploadsCompletedLocally(actorName())
+            _snackbarEvents.tryEmit(if (count > 0) "$count upload item(s) marked completed." else "No pending items.")
+        }
+    }
+
+    fun clearCompletedUploads() {
+        viewModelScope.launch {
+            repository.clearCompletedUploads()
+            _snackbarEvents.tryEmit("Cleared completed upload log.")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Reminders
+    // -------------------------------------------------------------------------
 
     fun saveCustomTemplate(stage: ReminderStage, language: AppLanguage, template: String) {
         viewModelScope.launch {
@@ -622,13 +954,20 @@ class CommitteeViewModel(
         return launched
     }
 
+    // -------------------------------------------------------------------------
+    // PDF View, Share, Print, Download & JSON Backup
+    // -------------------------------------------------------------------------
+
     fun generateAndOpenPdf(
         context: Context,
         reportType: PdfReportType,
         selectedMember: CommitteeMember?,
         shareMode: Boolean
     ) {
-        val committee = activeCommittee.value ?: return
+        val committee = activeCommittee.value ?: run {
+            _snackbarEvents.tryEmit("Create or select a committee first.")
+            return
+        }
         val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
         val summary = dashboardSummary.value ?: return
@@ -649,11 +988,86 @@ class CommitteeViewModel(
             res.onSuccess { file: File ->
                 val opened = PdfReportGenerator.openOrSharePdf(context, file, shareMode)
                 if (!opened) {
-                    _snackbarEvents.tryEmit("PDF saved (${file.name}), no PDF viewer app installed.")
+                    _snackbarEvents.tryEmit("PDF generated (${file.name}), use Download or Print.")
                 }
             }.onFailure {
                 _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to generate PDF.")
             }
+        }
+    }
+
+    fun printReport(
+        context: Context,
+        reportType: PdfReportType,
+        selectedMember: CommitteeMember? = null
+    ) {
+        val committee = activeCommittee.value ?: run {
+            _snackbarEvents.tryEmit("Create or select a committee first.")
+            return
+        }
+        val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
+        val summary = dashboardSummary.value ?: return
+
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = PdfReportGenerator.generateReport(
+                context = context,
+                reportType = reportType,
+                committee = committee,
+                members = members,
+                installments = installments,
+                selectedMonthKey = _selectedMonthKey.value,
+                selectedMember = selectedMember,
+                summary = summary
+            )
+            _isBusy.value = false
+            res.onSuccess { file ->
+                PdfReportGenerator.printPdf(context, file, "GM HASMANI - ${committee.name}")
+                    .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Print failed.") }
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to prepare print PDF.")
+            }
+        }
+    }
+
+    fun preparePdfForDownload(
+        context: Context,
+        reportType: PdfReportType,
+        selectedMember: CommitteeMember? = null,
+        onReady: (File) -> Unit
+    ) {
+        val committee = activeCommittee.value ?: run {
+            _snackbarEvents.tryEmit("Create or select a committee first.")
+            return
+        }
+        val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
+        val summary = dashboardSummary.value ?: return
+
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = PdfReportGenerator.generateReport(
+                context = context,
+                reportType = reportType,
+                committee = committee,
+                members = members,
+                installments = installments,
+                selectedMonthKey = _selectedMonthKey.value,
+                selectedMember = selectedMember,
+                summary = summary
+            )
+            _isBusy.value = false
+            res.onSuccess(onReady)
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to create PDF.") }
+        }
+    }
+
+    fun savePdfToUri(context: Context, file: File, targetUri: Uri) {
+        viewModelScope.launch {
+            PdfReportGenerator.savePdfToUri(context, file, targetUri)
+                .onSuccess { _snackbarEvents.tryEmit("PDF downloaded successfully.") }
+                .onFailure { _snackbarEvents.tryEmit("Download failed: ${it.localizedMessage}") }
         }
     }
 
@@ -667,7 +1081,7 @@ class CommitteeViewModel(
     fun restoreBackupJson(json: String) {
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.restoreFromBackupJson(json)
+            val res = repository.restoreFromBackupJson(json, actorName())
             _isBusy.value = false
             res.onSuccess { count ->
                 _snackbarEvents.tryEmit("Restored $count committees from backup.")

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,8 +18,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -34,10 +37,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,8 +53,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.example.data.MessagingGatewayConfig
 import com.example.i18n.UiStrings
+import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeUtils
@@ -286,7 +292,6 @@ fun CommitteeEditorDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Live Auto-Calculated Preview
                 Surface(
                     color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
                     shape = RoundedCornerShape(14.dp),
@@ -336,6 +341,83 @@ fun CommitteeEditorDialog(
             TextButton(onClick = onDismiss) { Text(strings.cancel) }
         }
     )
+}
+
+@Composable
+fun CommitteeDetailDialog(
+    strings: UiStrings,
+    committee: Committee,
+    activeMemberCount: Int,
+    onEdit: () -> Unit,
+    onPrint: () -> Unit,
+    onDownload: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(committee.name, fontWeight = FontWeight.Bold)
+                CommitteeStatusBadge(committee.statusEnum, strings)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                DetailRow(strings.numberOfMembers, "$activeMemberCount / ${committee.memberCount}")
+                DetailRow(strings.monthlyInstallment, FormatUtils.formatPkr(committee.monthlyInstallment))
+                DetailRow(strings.monthlyCollection, FormatUtils.formatPkr(committee.monthlyCollectionTotal))
+                DetailRow(strings.totalCommitteeAmount, FormatUtils.formatPkr(committee.totalCommitteeAmount))
+                DetailRow(strings.eachPayoutAmount, FormatUtils.formatPkr(committee.eachPayoutAmount))
+                DetailRow(strings.totalDurationMonths, "${committee.totalMonths} (${committee.startMonth} → ${committee.endMonth})")
+                DetailRow(strings.collectionWindowLabel, "${committee.collectionDayStart}th – ${committee.collectionDayEnd}th • Payout ${committee.payoutDay}th")
+                if (!committee.notes.isNullOrBlank()) {
+                    DetailRow(strings.paymentNote, committee.notes)
+                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onPrint, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Rounded.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(strings.printLabel)
+                    }
+                    OutlinedButton(onClick = onDownload, modifier = Modifier.weight(1f)) {
+                        Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(strings.downloadLabel)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onEdit) {
+                Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(strings.editLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(strings.close) }
+        }
+    )
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold
+        )
+    }
 }
 
 @Composable
@@ -438,6 +520,7 @@ fun RecordPaymentDialog(
     record: InstallmentRecord,
     logs: List<PaymentHistoryLog>,
     onDismiss: () -> Unit,
+    onReversePayment: ((reason: String) -> Unit)? = null,
     onSave: (paidAmount: Long, status: InstallmentStatus, paymentDate: String, note: String?) -> Unit
 ) {
     var selectedStatus by remember { mutableStateOf(record.statusEnum) }
@@ -450,11 +533,48 @@ fun RecordPaymentDialog(
     var paymentDate by remember { mutableStateOf(record.paymentDate ?: MonthUtils.todayDateString()) }
     var note by remember { mutableStateOf(record.paymentNote ?: "") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var showReverseConfirm by remember { mutableStateOf(false) }
+    var reverseReason by remember { mutableStateOf("") }
 
     val itemLogs = remember(logs, record.id) {
         logs.filter { it.installmentId == record.id }
     }
     val logTimeFmt = remember { SimpleDateFormat("dd MMM HH:mm", Locale.US) }
+
+    if (showReverseConfirm && onReversePayment != null) {
+        AlertDialog(
+            onDismissRequest = { showReverseConfirm = false },
+            icon = { Icon(Icons.Rounded.Undo, contentDescription = null, tint = StatusUnpaidRed) },
+            title = { Text(strings.reversePaymentLabel, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Reset ${record.memberName}'s payment (${FormatUtils.formatPkr(record.paidAmount)}) to UNPAID while keeping an audit history entry?")
+                    OutlinedTextField(
+                        value = reverseReason,
+                        onValueChange = { reverseReason = it },
+                        label = { Text(strings.reverseReasonHint) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showReverseConfirm = false
+                        onReversePayment(reverseReason)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusUnpaidRed),
+                    modifier = Modifier.testTag("confirm_reverse_payment_btn")
+                ) {
+                    Text(strings.confirm)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReverseConfirm = false }) { Text(strings.cancel) }
+            }
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -472,7 +592,7 @@ fun RecordPaymentDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 430.dp)
+                    .heightIn(max = 440.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
@@ -538,6 +658,17 @@ fun RecordPaymentDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                if (record.paidAmount > 0L && onReversePayment != null) {
+                    OutlinedButton(
+                        onClick = { showReverseConfirm = true },
+                        modifier = Modifier.fillMaxWidth().testTag("reverse_payment_button")
+                    ) {
+                        Icon(Icons.Rounded.Undo, contentDescription = null, tint = StatusUnpaidRed, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(strings.reversePaymentLabel, color = StatusUnpaidRed)
+                    }
+                }
 
                 if (errorMsg != null) {
                     Text(errorMsg ?: "", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -616,6 +747,7 @@ fun MemberDetailDialog(
     installments: List<InstallmentRecord>,
     onDismiss: () -> Unit,
     onExportPdf: () -> Unit,
+    onPrintPdf: (() -> Unit)? = null,
     onOpenWhatsApp: () -> Unit,
     onOpenSms: () -> Unit
 ) {
@@ -673,13 +805,25 @@ fun MemberDetailDialog(
                     }
                 }
 
-                OutlinedButton(
-                    onClick = onExportPdf,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Rounded.PictureAsPdf, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(strings.reportIndividualHistory)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onExportPdf,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(strings.viewLabel)
+                    }
+                    if (onPrintPdf != null) {
+                        OutlinedButton(
+                            onClick = onPrintPdf,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Rounded.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(strings.printLabel)
+                        }
+                    }
                 }
 
                 HorizontalDivider()
@@ -797,86 +941,6 @@ fun CommitteeSwitcherDialog(
 }
 
 @Composable
-fun MessagingGatewayConfigDialog(
-    strings: UiStrings,
-    currentConfig: MessagingGatewayConfig,
-    onDismiss: () -> Unit,
-    onSave: (waPhoneId: String, waToken: String, smsUrl: String, smsApiKey: String, smsSender: String) -> Unit
-) {
-    var waPhoneId by remember { mutableStateOf(currentConfig.whatsappPhoneNumberId) }
-    var waToken by remember { mutableStateOf(currentConfig.whatsappAccessToken) }
-    var smsUrl by remember { mutableStateOf(currentConfig.smsGatewayUrl) }
-    var smsKey by remember { mutableStateOf(currentConfig.smsGatewayApiKey) }
-    var smsSender by remember { mutableStateOf(currentConfig.smsSenderId) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(strings.messagingApiSettingsTitle, fontWeight = FontWeight.Bold) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = "Optional: Enter Meta WhatsApp Business Cloud API & HTTP SMS Gateway credentials. If left blank, the app uses Manual WhatsApp / SMS mode cleanly.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text("WhatsApp Business Cloud API", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = waPhoneId,
-                    onValueChange = { waPhoneId = it },
-                    label = { Text("Phone Number ID") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = waToken,
-                    onValueChange = { waToken = it },
-                    label = { Text("Permanent / Cloud Access Token") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                Text("HTTP SMS Gateway", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                OutlinedTextField(
-                    value = smsUrl,
-                    onValueChange = { smsUrl = it },
-                    label = { Text("Gateway POST URL (e.g. https://...)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = smsKey,
-                    onValueChange = { smsKey = it },
-                    label = { Text("API Key / Bearer Token") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = smsSender,
-                    onValueChange = { smsSender = it },
-                    label = { Text("Sender ID") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = { onSave(waPhoneId, waToken, smsUrl, smsKey, smsSender) }) {
-                Text(strings.save)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(strings.cancel) }
-        }
-    )
-}
-
-@Composable
 fun RecordPayoutDialog(
     strings: UiStrings,
     committee: Committee,
@@ -953,9 +1017,11 @@ fun RecordPayoutDialog(
 fun PaymentActivityHistoryDialog(
     strings: UiStrings,
     logs: List<PaymentHistoryLog>,
+    auditLogs: List<AuditLogEntry> = emptyList(),
     onDismiss: () -> Unit
 ) {
     val timeFmt = remember { SimpleDateFormat("dd MMM yyyy • HH:mm", Locale.US) }
+    var tab by remember { mutableIntStateOf(0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -970,43 +1036,98 @@ fun PaymentActivityHistoryDialog(
         },
         text = {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (logs.isEmpty()) {
-                    Text(
-                        text = strings.noHistoryYet,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                TabRow(selectedTabIndex = tab) {
+                    Tab(
+                        selected = tab == 0,
+                        onClick = { tab = 0 },
+                        text = { Text("${strings.paymentEditsTab} (${logs.size})") }
                     )
-                } else {
-                    logs.forEach { log ->
-                        val tsText = timeFmt.format(Date(log.createdAtMillis))
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text(
-                                    text = "${log.memberName} • ${MonthUtils.formatMonthDisplay(log.monthKey)}",
-                                    style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)})",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = tsText + (log.actionNote?.let { " • $it" } ?: ""),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                    Tab(
+                        selected = tab == 1,
+                        onClick = { tab = 1 },
+                        text = { Text("${strings.auditRecordsTab} (${auditLogs.size})") }
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (tab == 0) {
+                        if (logs.isEmpty()) {
+                            Text(
+                                text = strings.noHistoryYet,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            logs.forEach { log ->
+                                val tsText = timeFmt.format(Date(log.createdAtMillis))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(
+                                            text = "${log.memberName} • ${MonthUtils.formatMonthDisplay(log.monthKey)}",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)})",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            text = tsText + (log.actionNote?.let { " • $it" } ?: ""),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        if (auditLogs.isEmpty()) {
+                            Text(
+                                text = strings.noHistoryYet,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            auditLogs.forEach { entry ->
+                                val tsText = timeFmt.format(Date(entry.createdAtMillis))
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(
+                                            text = "${entry.actionType} • ${entry.targetName}",
+                                            style = MaterialTheme.typography.labelLarge,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = entry.details,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "${entry.actorName} • $tsText",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1018,4 +1139,3 @@ fun PaymentActivityHistoryDialog(
         }
     )
 }
-

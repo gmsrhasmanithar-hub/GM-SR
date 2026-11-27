@@ -11,9 +11,12 @@ import androidx.room.RoomDatabase
         MemberEntity::class,
         InstallmentEntity::class,
         PaymentLogEntity::class,
-        ReminderLogEntity::class
+        ReminderLogEntity::class,
+        LocalUserEntity::class,
+        AuditLogEntity::class,
+        UploadQueueEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -29,7 +32,10 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "gm_hasmani_committee.db"
-                ).build().also { INSTANCE = it }
+                )
+                    .fallbackToDestructiveMigration(true)
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }

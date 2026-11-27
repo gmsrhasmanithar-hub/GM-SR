@@ -4,11 +4,14 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.InstallmentRecord
+import com.example.model.LocalUser
 import com.example.model.PaymentHistoryLog
 import com.example.model.ReminderLog
+import com.example.model.UploadQueueItem
 
 @Entity(tableName = "committees")
 data class CommitteeEntity(
@@ -44,23 +47,6 @@ data class CommitteeEntity(
         updatedAtMillis = updatedAtMillis
     )
 }
-
-fun Committee.toEntity(): CommitteeEntity = CommitteeEntity(
-    id = id,
-    name = name,
-    memberCount = memberCount,
-    monthlyInstallment = monthlyInstallment,
-    totalMonths = totalMonths,
-    collectionDayStart = collectionDayStart,
-    collectionDayEnd = collectionDayEnd,
-    payoutDay = payoutDay,
-    startMonth = startMonth,
-    endMonth = endMonth,
-    status = status,
-    notes = notes,
-    createdAtMillis = createdAtMillis,
-    updatedAtMillis = updatedAtMillis
-)
 
 @Entity(
     tableName = "members",
@@ -103,21 +89,6 @@ data class MemberEntity(
         updatedAtMillis = updatedAtMillis
     )
 }
-
-fun CommitteeMember.toEntity(overrideCommitteeId: String = committeeId): MemberEntity = MemberEntity(
-    id = id,
-    committeeId = overrideCommitteeId,
-    name = name,
-    phone = phone,
-    committeeNumber = committeeNumber,
-    payoutMonth = payoutMonth,
-    payoutStatus = payoutStatus,
-    payoutDate = payoutDate,
-    payoutAmount = payoutAmount,
-    status = status,
-    createdAtMillis = createdAtMillis,
-    updatedAtMillis = updatedAtMillis
-)
 
 @Entity(
     tableName = "installments",
@@ -167,24 +138,6 @@ data class InstallmentEntity(
     )
 }
 
-fun InstallmentRecord.toEntity(overrideCommitteeId: String = committeeId): InstallmentEntity = InstallmentEntity(
-    id = id,
-    committeeId = overrideCommitteeId,
-    memberId = memberId,
-    memberName = memberName,
-    memberPhone = memberPhone,
-    committeeNumber = committeeNumber,
-    monthKey = monthKey,
-    monthIndex = monthIndex,
-    dueAmount = dueAmount,
-    paidAmount = paidAmount,
-    status = status,
-    paymentDate = paymentDate,
-    paymentNote = paymentNote,
-    createdAtMillis = createdAtMillis,
-    updatedAtMillis = updatedAtMillis
-)
-
 @Entity(
     tableName = "payment_logs",
     foreignKeys = [
@@ -226,21 +179,6 @@ data class PaymentLogEntity(
         createdAtMillis = createdAtMillis
     )
 }
-
-fun PaymentHistoryLog.toEntity(overrideCommitteeId: String = committeeId): PaymentLogEntity = PaymentLogEntity(
-    id = id,
-    committeeId = overrideCommitteeId,
-    installmentId = installmentId,
-    memberId = memberId,
-    memberName = memberName,
-    monthKey = monthKey,
-    previousPaidAmount = previousPaidAmount,
-    newPaidAmount = newPaidAmount,
-    previousStatus = previousStatus,
-    newStatus = newStatus,
-    actionNote = actionNote,
-    createdAtMillis = createdAtMillis
-)
 
 @Entity(
     tableName = "reminder_logs",
@@ -284,17 +222,69 @@ data class ReminderLogEntity(
     )
 }
 
-fun ReminderLog.toEntity(overrideCommitteeId: String = committeeId): ReminderLogEntity = ReminderLogEntity(
-    id = id,
-    committeeId = overrideCommitteeId,
-    memberId = memberId,
-    memberName = memberName,
-    memberPhone = memberPhone,
-    monthKey = monthKey,
-    channel = channel,
-    scheduleStage = scheduleStage,
-    messagePreview = messagePreview,
-    dispatchStatus = dispatchStatus,
-    errorDetail = errorDetail,
-    createdAtMillis = createdAtMillis
-)
+@Entity(tableName = "local_users")
+data class LocalUserEntity(
+    @PrimaryKey val id: String,
+    val username: String,
+    val displayName: String,
+    val passwordHash: String,
+    val role: String,
+    val isActive: Boolean,
+    val createdAtMillis: Long
+) {
+    fun toModel(): LocalUser = LocalUser(
+        id = id,
+        username = username,
+        displayName = displayName,
+        passwordHash = passwordHash,
+        role = role,
+        isActive = isActive,
+        createdAtMillis = createdAtMillis
+    )
+}
+
+@Entity(tableName = "audit_logs")
+data class AuditLogEntity(
+    @PrimaryKey val id: String,
+    val actorName: String,
+    val actionType: String,
+    val targetType: String,
+    val targetName: String,
+    val details: String,
+    val createdAtMillis: Long
+) {
+    fun toModel(): AuditLogEntry = AuditLogEntry(
+        id = id,
+        actorName = actorName,
+        actionType = actionType,
+        targetType = targetType,
+        targetName = targetName,
+        details = details,
+        createdAtMillis = createdAtMillis
+    )
+}
+
+@Entity(tableName = "upload_queue")
+data class UploadQueueEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val payloadType: String,
+    val payloadJson: String,
+    val status: String,
+    val errorMessage: String?,
+    val attempts: Int,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    fun toModel(): UploadQueueItem = UploadQueueItem(
+        id = id,
+        title = title,
+        payloadType = payloadType,
+        payloadJson = payloadJson,
+        status = status,
+        errorMessage = errorMessage,
+        attempts = attempts,
+        createdAtMillis = createdAtMillis,
+        updatedAtMillis = updatedAtMillis
+    )
+}

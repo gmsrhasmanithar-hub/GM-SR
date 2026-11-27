@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +19,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Search
@@ -75,8 +76,10 @@ fun InstallmentsScreen(
     onSelectMonth: (String) -> Unit,
     onSelectFilter: (InstallmentFilter) -> Unit,
     onSyncMonth: () -> Unit,
+    onDeleteUnpaidMonth: (String) -> Unit,
     onQuickMarkPaid: (InstallmentRecord) -> Unit,
     onEditPayment: (InstallmentRecord) -> Unit,
+    onDeleteInstallment: (InstallmentRecord) -> Unit,
     onQuickWhatsApp: (CommitteeMember, Long) -> Unit,
     onQuickSms: (CommitteeMember, Long) -> Unit,
     onOpenActivityHistory: () -> Unit,
@@ -101,6 +104,7 @@ fun InstallmentsScreen(
     val paidCount = monthRecords.count { it.statusEnum == InstallmentStatus.PAID }
     val unpaidCount = monthRecords.count { it.statusEnum == InstallmentStatus.UNPAID }
     val partialCount = monthRecords.count { it.statusEnum == InstallmentStatus.PARTIAL }
+    val hasUnpaidInMonth = monthRecords.any { it.paidAmount == 0L }
 
     val visibleRecords = remember(monthRecords, activeFilter, searchText) {
         val byStatus = when (activeFilter) {
@@ -130,7 +134,7 @@ fun InstallmentsScreen(
             )
         }
 
-        // Monthly Collection Summary Bar
+        // Monthly Collection Summary + Action Buttons
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -165,17 +169,11 @@ fun InstallmentsScreen(
                         }
                     }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "${strings.paidLabel}: $paidCount  •  ${strings.partialLabel}: $partialCount  •  ${strings.unpaidLabel}: $unpaidCount",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = "${strings.paidLabel}: $paidCount  •  ${strings.partialLabel}: $partialCount  •  ${strings.unpaidLabel}: $unpaidCount",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -197,7 +195,23 @@ fun InstallmentsScreen(
                         ) {
                             Icon(Icons.Rounded.History, contentDescription = strings.activityHistoryTitle, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(strings.paymentHistory.take(16), maxLines = 1)
+                            Text(strings.paymentHistory, maxLines = 1)
+                        }
+                    }
+
+                    if (hasUnpaidInMonth) {
+                        OutlinedButton(
+                            onClick = { onDeleteUnpaidMonth(selectedMonthKey) },
+                            modifier = Modifier.fillMaxWidth().testTag("delete_unpaid_month_button"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Rounded.DeleteSweep, contentDescription = null, tint = StatusUnpaidRed, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "${strings.deleteUnpaidMonthLabel} (${MonthUtils.formatMonthDisplay(selectedMonthKey)})",
+                                color = StatusUnpaidRed,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
@@ -312,7 +326,7 @@ fun InstallmentsScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (rec.statusEnum != InstallmentStatus.PAID) {
@@ -324,7 +338,7 @@ fun InstallmentsScreen(
                                 ) {
                                     Icon(Icons.Rounded.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Text(strings.markPaid)
+                                    Text(strings.markPaid, maxLines = 1)
                                 }
                             } else {
                                 Surface(
@@ -347,9 +361,18 @@ fun InstallmentsScreen(
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.testTag("edit_payment_btn_${rec.id}")
                             ) {
-                                Icon(Icons.Rounded.Edit, contentDescription = strings.markPartial, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Rounded.Edit, contentDescription = strings.editLabel, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text(if (rec.statusEnum == InstallmentStatus.PAID) "Edit" else strings.markPartial)
+                                Text(if (rec.paidAmount > 0L) strings.editLabel else strings.markPartial, maxLines = 1)
+                            }
+
+                            if (rec.paidAmount == 0L) {
+                                IconButton(
+                                    onClick = { onDeleteInstallment(rec) },
+                                    modifier = Modifier.testTag("delete_installment_btn_${rec.id}")
+                                ) {
+                                    Icon(Icons.Rounded.Delete, contentDescription = strings.deleteLabel, tint = StatusUnpaidRed)
+                                }
                             }
 
                             if (rec.statusEnum != InstallmentStatus.PAID && member != null) {

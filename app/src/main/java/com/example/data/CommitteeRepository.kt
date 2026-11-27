@@ -3,35 +3,56 @@ package com.example.data
 import android.content.Context
 import androidx.room.withTransaction
 import com.example.data.local.AppDatabase
+import com.example.data.local.AuditLogEntity
 import com.example.data.local.CommitteeDao
 import com.example.data.local.CommitteeEntity
 import com.example.data.local.InstallmentEntity
+import com.example.data.local.LocalUserEntity
 import com.example.data.local.MemberEntity
 import com.example.data.local.PaymentLogEntity
 import com.example.data.local.ReminderLogEntity
+import com.example.data.local.UploadQueueEntity
+import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
 import com.example.model.DispatchStatus
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
+import com.example.model.LocalUser
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
+import com.example.model.PasswordHasher
 import com.example.model.PaymentHistoryLog
 import com.example.model.PayoutStatus
 import com.example.model.ReminderChannel
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
+import com.example.model.UploadBatchSummary
+import com.example.model.UploadQueueItem
+import com.example.model.UploadQueueStatus
+import com.example.model.UserRole
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class CommitteeRepository(
     private val db: AppDatabase,
-    private val dao: CommitteeDao = db.committeeDao()
+    private val dao: CommitteeDao = db.committeeDao(),
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
 ) {
     constructor(context: Context) : this(AppDatabase.getInstance(context))
 
@@ -50,6 +71,200 @@ class CommitteeRepository(
     fun observeReminderLogs(committeeId: String): Flow<List<ReminderLog>> =
         dao.observeReminderLogs(committeeId).map { list -> list.map { it.toModel() } }
 
+    fun observeUsers(): Flow<List<LocalUser>> =
+        dao.observeUsers().map { list -> list.map { it.toModel() } }
+
+    fun observeAuditLogs(): Flow<List<AuditLogEntry>> =
+        dao.observeAuditLogs().map { list -> list.map { it.toModel() } }
+
+    fun observeUploadQueue(): Flow<List<UploadQueueItem>> =
+        dao.observeUploadQueue().map { list -> list.map { it.toModel() } }
+
+    // -------------------------------------------------------------------------
+    // Local User Management & Admin Verification
+    // -------------------------------------------------------------------------
+
+    suspend fun ensureDefaultAdmin(): LocalUser {
+        val existing = dao.getAllUsersOnce()
+        val admin = existing.firstOrNull { it.role == UserRole.ADMIN.name && it.isActive }
+        if (admin != null) return admin.toModel()
+
+        val now = System.currentTimeMillis()
+        val defaultAdmin = LocalUserEntity(
+            id = DEFAULT_ADMIN_ID,
+            username = "admin",
+            displayName = "GM Hasmani Admin",
+            passwordHash = PasswordHasher.sha256(DEFAULT_ADMIN_PIN),
+            role = UserRole.ADMIN.name,
+            isActive = true,
+            createdAtMillis = now
+        )
+        dao.insertUser(defaultAdmin)
+        return defaultAdmin.toModel()
+    }
+
+    suspend fun getUserById(userId: String): LocalUser? =
+        dao.getUserByIdOnce(userId)?.toModel()
+
+    suspend fun authenticateUser(username: String, password: String): Result<LocalUser> {
+        return try {
+            val cleanUser = username.trim()
+            require(cleanUser.isNotEmpty()) { "Username is required" }
+            require(password.isNotEmpty()) { "Password / PIN is required" }
+            val user = dao.getUserByUsernameOnce(cleanUser)
+                ?: return Result.failure(IllegalArgumentException("User not found"))
+            if (!user.isActive) {
+                return Result.failure(IllegalStateException("This user account is disabled"))
+            }
+            if (user.passwordHash != PasswordHasher.sha256(password)) {
+                return Result.failure(IllegalArgumentException("Incorrect password / PIN"))
+            }
+            recordAudit(user.displayName, "LOGIN", "USER", user.username, "Local sign-in successful")
+            Result.success(user.toModel())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyAdminAccess(currentUser: LocalUser?, adminPassword: String): Result<LocalUser> {
+        return try {
+            if (currentUser == null || !currentUser.isAdmin || !currentUser.isActive) {
+                return Result.failure(SecurityException("Only authorized Admin users can delete records."))
+            }
+            if (adminPassword.isBlank()) {
+                return Result.failure(IllegalArgumentException("Enter Admin Password / PIN to confirm deletion."))
+            }
+            val fresh = dao.getUserByIdOnce(currentUser.id)
+                ?: return Result.failure(SecurityException("Authorized Admin account not found."))
+            if (!fresh.isActive || fresh.role != UserRole.ADMIN.name) {
+                return Result.failure(SecurityException("Only authorized Admin users can delete records."))
+            }
+            if (fresh.passwordHash != PasswordHasher.sha256(adminPassword)) {
+                return Result.failure(SecurityException("Incorrect Admin Password / PIN."))
+            }
+            Result.success(fresh.toModel())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createUser(
+        username: String,
+        displayName: String,
+        password: String,
+        role: UserRole,
+        actorName: String
+    ): Result<LocalUser> {
+        return try {
+            val cleanUsername = username.trim().lowercase()
+            val cleanDisplay = displayName.trim()
+            require(cleanUsername.length >= 3) { "Username must be at least 3 characters" }
+            require(cleanDisplay.isNotEmpty()) { "Display name is required" }
+            require(password.length >= 4) { "Password / PIN must be at least 4 characters" }
+            if (dao.getUserByUsernameOnce(cleanUsername) != null) {
+                return Result.failure(IllegalStateException("Username \"$cleanUsername\" already exists"))
+            }
+            val entity = LocalUserEntity(
+                id = UUID.randomUUID().toString(),
+                username = cleanUsername,
+                displayName = cleanDisplay.take(60),
+                passwordHash = PasswordHasher.sha256(password),
+                role = role.name,
+                isActive = true,
+                createdAtMillis = System.currentTimeMillis()
+            )
+            dao.insertUser(entity)
+            recordAudit(actorName, "CREATE_USER", "USER", cleanUsername, "Created ${role.name} user $cleanDisplay")
+            Result.success(entity.toModel())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateUserRoleAndActive(
+        target: LocalUser,
+        newRole: UserRole,
+        isActive: Boolean,
+        actorName: String
+    ): Result<Unit> {
+        return try {
+            val allUsers = dao.getAllUsersOnce()
+            val activeAdmins = allUsers.count { it.role == UserRole.ADMIN.name && it.isActive && it.id != target.id }
+            if ((newRole != UserRole.ADMIN || !isActive) && target.isAdmin && activeAdmins == 0) {
+                return Result.failure(IllegalStateException("At least one active Admin user must remain."))
+            }
+            dao.updateUser(
+                LocalUserEntity(
+                    id = target.id,
+                    username = target.username,
+                    displayName = target.displayName,
+                    passwordHash = target.passwordHash,
+                    role = newRole.name,
+                    isActive = isActive,
+                    createdAtMillis = target.createdAtMillis
+                )
+            )
+            recordAudit(actorName, "UPDATE_USER", "USER", target.username, "Role=${newRole.name}, Active=$isActive")
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteUser(target: LocalUser, currentUserId: String?, actorName: String): Result<Unit> {
+        return try {
+            if (target.id == currentUserId) {
+                return Result.failure(IllegalStateException("Cannot delete the currently logged-in user."))
+            }
+            val allUsers = dao.getAllUsersOnce()
+            val otherActiveAdmins = allUsers.count { it.role == UserRole.ADMIN.name && it.isActive && it.id != target.id }
+            if (target.isAdmin && otherActiveAdmins == 0) {
+                return Result.failure(IllegalStateException("Cannot delete the last Admin account."))
+            }
+            dao.deleteUserById(target.id)
+            recordAudit(actorName, "DELETE_USER", "USER", target.username, "Removed local user account")
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun changePassword(
+        userId: String,
+        currentPassword: String,
+        newPassword: String
+    ): Result<Unit> {
+        return try {
+            require(newPassword.length >= 4) { "New password / PIN must be at least 4 characters" }
+            val user = dao.getUserByIdOnce(userId)
+                ?: return Result.failure(IllegalStateException("User not found"))
+            if (user.passwordHash != PasswordHasher.sha256(currentPassword)) {
+                return Result.failure(IllegalArgumentException("Current password / PIN is incorrect"))
+            }
+            dao.updateUser(user.copy(passwordHash = PasswordHasher.sha256(newPassword)))
+            recordAudit(user.displayName, "CHANGE_PASSWORD", "USER", user.username, "Updated local password/PIN")
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Committee CRUD + Financial-Protected Delete
+    // -------------------------------------------------------------------------
+
     suspend fun createCommittee(
         name: String,
         memberCount: Long,
@@ -59,7 +274,8 @@ class CommitteeRepository(
         collectionDayEnd: Long,
         payoutDay: Long,
         startMonth: String,
-        notes: String?
+        notes: String?,
+        actorName: String = "Admin"
     ): Result<String> {
         return try {
             require(name.trim().isNotEmpty()) { "Committee name is required" }
@@ -71,9 +287,10 @@ class CommitteeRepository(
             val now = System.currentTimeMillis()
             val id = UUID.randomUUID().toString()
             val endMonth = MonthUtils.addMonths(startMonth, (totalMonths - 1).toInt())
+            val cleanName = name.trim().take(80)
             val entity = CommitteeEntity(
                 id = id,
-                name = name.trim().take(80),
+                name = cleanName,
                 memberCount = memberCount,
                 monthlyInstallment = monthlyInstallment,
                 totalMonths = totalMonths,
@@ -87,7 +304,25 @@ class CommitteeRepository(
                 createdAtMillis = now,
                 updatedAtMillis = now
             )
-            dao.insertCommittee(entity)
+            db.withTransaction {
+                dao.insertCommittee(entity)
+                insertAuditInternal(
+                    actorName, "CREATE_COMMITTEE", "COMMITTEE", cleanName,
+                    "$memberCount members • PKR $monthlyInstallment/mo • $totalMonths months ($startMonth)"
+                )
+                enqueueUploadInternal(
+                    title = "Committee Created: $cleanName",
+                    payloadType = "COMMITTEE",
+                    payload = JSONObject().apply {
+                        put("id", id)
+                        put("name", cleanName)
+                        put("memberCount", memberCount)
+                        put("monthlyInstallment", monthlyInstallment)
+                        put("totalMonths", totalMonths)
+                        put("startMonth", startMonth)
+                    }
+                )
+            }
             Result.success(id)
         } catch (e: CancellationException) {
             throw e
@@ -106,7 +341,8 @@ class CommitteeRepository(
         newCollectionDayEnd: Long,
         newPayoutDay: Long,
         newStartMonth: String,
-        newNotes: String?
+        newNotes: String?,
+        actorName: String = "Admin"
     ): Result<Unit> {
         return try {
             require(existing.id.isNotBlank())
@@ -119,12 +355,13 @@ class CommitteeRepository(
             val now = System.currentTimeMillis()
             val endMonth = MonthUtils.addMonths(newStartMonth, (newTotalMonths - 1).toInt())
             val newPayoutAmount = newMemberCount * newMonthlyInstallment
+            val cleanName = newName.trim().take(80)
 
             db.withTransaction {
                 dao.updateCommittee(
                     CommitteeEntity(
                         id = existing.id,
-                        name = newName.trim().take(80),
+                        name = cleanName,
                         memberCount = newMemberCount,
                         monthlyInstallment = newMonthlyInstallment,
                         totalMonths = newTotalMonths,
@@ -168,6 +405,21 @@ class CommitteeRepository(
                         }
                     }
                 }
+
+                insertAuditInternal(
+                    actorName, "EDIT_COMMITTEE", "COMMITTEE", cleanName,
+                    "Updated settings: $newMemberCount members, PKR $newMonthlyInstallment/mo, $newTotalMonths months"
+                )
+                enqueueUploadInternal(
+                    title = "Committee Updated: $cleanName",
+                    payloadType = "COMMITTEE_UPDATE",
+                    payload = JSONObject().apply {
+                        put("id", existing.id)
+                        put("name", cleanName)
+                        put("memberCount", newMemberCount)
+                        put("monthlyInstallment", newMonthlyInstallment)
+                    }
+                )
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -177,9 +429,20 @@ class CommitteeRepository(
         }
     }
 
-    suspend fun updateCommitteeStatus(committeeId: String, status: CommitteeStatus): Result<Unit> {
+    suspend fun updateCommitteeStatus(
+        committeeId: String,
+        status: CommitteeStatus,
+        actorName: String = "Admin"
+    ): Result<Unit> {
         return try {
-            dao.updateCommitteeStatus(committeeId, status.name, System.currentTimeMillis())
+            val committee = dao.getCommitteeByIdOnce(committeeId)
+            db.withTransaction {
+                dao.updateCommitteeStatus(committeeId, status.name, System.currentTimeMillis())
+                insertAuditInternal(
+                    actorName, "COMMITTEE_STATUS", "COMMITTEE", committee?.name ?: committeeId,
+                    "Changed status to ${status.name}"
+                )
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -188,11 +451,54 @@ class CommitteeRepository(
         }
     }
 
+    suspend fun deleteCommitteeSafely(
+        committee: Committee,
+        currentUser: LocalUser?,
+        adminPassword: String
+    ): Result<Unit> {
+        val authRes = verifyAdminAccess(currentUser, adminPassword)
+        if (authRes.isFailure) return Result.failure(authRes.exceptionOrNull()!!)
+        val admin = authRes.getOrThrow()
+
+        return try {
+            val recordedPayments = dao.countRecordedPaymentsForCommittee(committee.id)
+            val paidPayouts = dao.countPaidPayoutsForCommittee(committee.id)
+            if (recordedPayments > 0 || paidPayouts > 0) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Financial protection: \"${committee.name}\" has $recordedPayments recorded payment(s) and $paidPayouts payout(s). " +
+                            "Use Archive Committee to preserve history, or reverse payments first."
+                    )
+                )
+            }
+            db.withTransaction {
+                dao.deleteCommitteeById(committee.id)
+                insertAuditInternal(
+                    admin.displayName,
+                    "DELETE_COMMITTEE",
+                    "COMMITTEE",
+                    committee.name,
+                    "Deleted empty/unpaid committee (${committee.memberCount} members, ${committee.startMonth})"
+                )
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Member CRUD + Safe Delete
+    // -------------------------------------------------------------------------
+
     suspend fun addMember(
         committee: Committee,
         name: String,
         phone: String,
-        committeeNumber: Long
+        committeeNumber: Long,
+        actorName: String = "Admin"
     ): Result<String> {
         return try {
             require(name.trim().isNotEmpty()) { "Member name is required" }
@@ -201,12 +507,14 @@ class CommitteeRepository(
 
             val now = System.currentTimeMillis()
             val memberId = UUID.randomUUID().toString()
+            val cleanName = name.trim().take(80)
+            val cleanPhone = phone.trim().take(25)
             val payoutMonth = MonthUtils.addMonths(committee.startMonth, (committeeNumber - 1).toInt().coerceAtLeast(0))
             val entity = MemberEntity(
                 id = memberId,
                 committeeId = committee.id,
-                name = name.trim().take(80),
-                phone = phone.trim().take(25),
+                name = cleanName,
+                phone = cleanPhone,
                 committeeNumber = committeeNumber,
                 payoutMonth = payoutMonth,
                 payoutStatus = PayoutStatus.PENDING.name,
@@ -216,7 +524,24 @@ class CommitteeRepository(
                 createdAtMillis = now,
                 updatedAtMillis = now
             )
-            dao.insertMember(entity)
+            db.withTransaction {
+                dao.insertMember(entity)
+                insertAuditInternal(
+                    actorName, "ADD_MEMBER", "MEMBER", cleanName,
+                    "Added #$committeeNumber ($cleanPhone) to ${committee.name}"
+                )
+                enqueueUploadInternal(
+                    title = "Member Added: $cleanName (#$committeeNumber)",
+                    payloadType = "MEMBER",
+                    payload = JSONObject().apply {
+                        put("id", memberId)
+                        put("committeeId", committee.id)
+                        put("name", cleanName)
+                        put("phone", cleanPhone)
+                        put("committeeNumber", committeeNumber)
+                    }
+                )
+            }
             Result.success(memberId)
         } catch (e: CancellationException) {
             throw e
@@ -230,7 +555,8 @@ class CommitteeRepository(
         member: CommitteeMember,
         newName: String,
         newPhone: String,
-        newCommitteeNumber: Long
+        newCommitteeNumber: Long,
+        actorName: String = "Admin"
     ): Result<Unit> {
         return try {
             require(newName.trim().isNotEmpty())
@@ -266,6 +592,10 @@ class CommitteeRepository(
                     committeeNumber = newCommitteeNumber,
                     updatedAtMillis = now
                 )
+                insertAuditInternal(
+                    actorName, "EDIT_MEMBER", "MEMBER", cleanName,
+                    "Updated #$newCommitteeNumber ($cleanPhone) in ${committee.name}"
+                )
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -275,9 +605,15 @@ class CommitteeRepository(
         }
     }
 
-    suspend fun archiveMember(committeeId: String, memberId: String): Result<Unit> {
+    suspend fun archiveMember(committeeId: String, member: CommitteeMember, actorName: String = "Admin"): Result<Unit> {
         return try {
-            dao.updateMemberStatus(memberId, MemberStatus.ARCHIVED.name, System.currentTimeMillis())
+            db.withTransaction {
+                dao.updateMemberStatus(member.id, MemberStatus.ARCHIVED.name, System.currentTimeMillis())
+                insertAuditInternal(
+                    actorName, "ARCHIVE_MEMBER", "MEMBER", member.name,
+                    "Archived member #${member.committeeNumber} (history preserved)"
+                )
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -286,10 +622,53 @@ class CommitteeRepository(
         }
     }
 
+    suspend fun deleteMemberSafely(
+        member: CommitteeMember,
+        currentUser: LocalUser?,
+        adminPassword: String
+    ): Result<Unit> {
+        val authRes = verifyAdminAccess(currentUser, adminPassword)
+        if (authRes.isFailure) return Result.failure(authRes.exceptionOrNull()!!)
+        val admin = authRes.getOrThrow()
+
+        return try {
+            val paidInstallments = dao.countRecordedPaymentsForMember(member.id)
+            if (paidInstallments > 0 || member.payoutStatusEnum == PayoutStatus.PAID) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Financial protection: ${member.name} has recorded payment/payout history ($paidInstallments payment(s)). " +
+                            "Use Archive Member to keep records intact, or reverse payments first."
+                    )
+                )
+            }
+            db.withTransaction {
+                dao.deleteUnpaidInstallmentsForMember(member.id)
+                dao.deleteMemberById(member.id)
+                insertAuditInternal(
+                    admin.displayName,
+                    "DELETE_MEMBER",
+                    "MEMBER",
+                    member.name,
+                    "Deleted unpaid member #${member.committeeNumber} (${member.phone})"
+                )
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Payouts & Installments + Safe Delete / Reversal
+    // -------------------------------------------------------------------------
+
     suspend fun swapMemberPayoutOrder(
         committee: Committee,
         first: CommitteeMember,
-        second: CommitteeMember
+        second: CommitteeMember,
+        actorName: String = "Admin"
     ): Result<Unit> {
         return try {
             val now = System.currentTimeMillis()
@@ -330,6 +709,10 @@ class CommitteeRepository(
                 )
                 dao.syncMemberSnapshotInInstallments(committee.id, first.id, first.name, first.phone, second.committeeNumber, now)
                 dao.syncMemberSnapshotInInstallments(committee.id, second.id, second.name, second.phone, first.committeeNumber, now)
+                insertAuditInternal(
+                    actorName, "REORDER_PAYOUT", "MEMBER", "${first.name} ↔ ${second.name}",
+                    "Swapped committee numbers #${first.committeeNumber} and #${second.committeeNumber}"
+                )
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -344,7 +727,8 @@ class CommitteeRepository(
         member: CommitteeMember,
         payoutStatus: PayoutStatus,
         payoutDate: String?,
-        payoutAmount: Long? = null
+        payoutAmount: Long? = null,
+        actorName: String = "Admin"
     ): Result<Unit> {
         return try {
             val now = System.currentTimeMillis()
@@ -355,22 +739,43 @@ class CommitteeRepository(
             } else {
                 null
             }
-            dao.updateMember(
-                MemberEntity(
-                    id = member.id,
-                    committeeId = committee.id,
-                    name = member.name,
-                    phone = member.phone,
-                    committeeNumber = member.committeeNumber,
-                    payoutMonth = member.payoutMonth,
-                    payoutStatus = payoutStatus.name,
-                    payoutDate = effectiveDate,
-                    payoutAmount = effectiveAmount.coerceIn(0L, 500_000_000L),
-                    status = member.status,
-                    createdAtMillis = member.createdAtMillis,
-                    updatedAtMillis = now
+            db.withTransaction {
+                dao.updateMember(
+                    MemberEntity(
+                        id = member.id,
+                        committeeId = committee.id,
+                        name = member.name,
+                        phone = member.phone,
+                        committeeNumber = member.committeeNumber,
+                        payoutMonth = member.payoutMonth,
+                        payoutStatus = payoutStatus.name,
+                        payoutDate = effectiveDate,
+                        payoutAmount = effectiveAmount.coerceIn(0L, 500_000_000L),
+                        status = member.status,
+                        createdAtMillis = member.createdAtMillis,
+                        updatedAtMillis = now
+                    )
                 )
-            )
+                insertAuditInternal(
+                    actorName,
+                    if (payoutStatus == PayoutStatus.PAID) "PAYOUT_PAID" else "PAYOUT_REVERSED",
+                    "PAYOUT",
+                    member.name,
+                    "${MonthUtils.formatMonthDisplay(member.payoutMonth)} • PKR $effectiveAmount • ${payoutStatus.name}"
+                )
+                enqueueUploadInternal(
+                    title = "Payout ${payoutStatus.name}: ${member.name}",
+                    payloadType = "PAYOUT",
+                    payload = JSONObject().apply {
+                        put("committeeId", committee.id)
+                        put("memberId", member.id)
+                        put("memberName", member.name)
+                        put("payoutStatus", payoutStatus.name)
+                        put("payoutAmount", effectiveAmount)
+                        put("payoutDate", effectiveDate ?: "")
+                    }
+                )
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
@@ -431,7 +836,8 @@ class CommitteeRepository(
         newPaidAmount: Long,
         newStatus: InstallmentStatus,
         paymentDate: String?,
-        paymentNote: String?
+        paymentNote: String?,
+        actorName: String = "Admin"
     ): Result<Unit> {
         return try {
             require(record.id.isNotBlank())
@@ -479,6 +885,27 @@ class CommitteeRepository(
                         createdAtMillis = now
                     )
                 )
+                insertAuditInternal(
+                    actorName,
+                    if (newStatus == InstallmentStatus.UNPAID && record.paidAmount > 0L) "PAYMENT_REVERSED" else "PAYMENT_SAVED",
+                    "INSTALLMENT",
+                    "${record.memberName} (${record.monthKey})",
+                    "${record.status} (${record.paidAmount}) → ${newStatus.name} ($clampedPaid)" +
+                        (cleanNote?.let { " • Note: $it" } ?: "")
+                )
+                enqueueUploadInternal(
+                    title = "Payment ${newStatus.name}: ${record.memberName} (${record.monthKey})",
+                    payloadType = "INSTALLMENT_PAYMENT",
+                    payload = JSONObject().apply {
+                        put("installmentId", record.id)
+                        put("committeeId", committeeId)
+                        put("memberId", record.memberId)
+                        put("memberName", record.memberName)
+                        put("monthKey", record.monthKey)
+                        put("paidAmount", clampedPaid)
+                        put("status", newStatus.name)
+                    }
+                )
             }
             Result.success(Unit)
         } catch (e: CancellationException) {
@@ -487,6 +914,94 @@ class CommitteeRepository(
             Result.failure(e)
         }
     }
+
+    suspend fun reverseInstallmentPayment(
+        committeeId: String,
+        record: InstallmentRecord,
+        reversalReason: String,
+        actorName: String = "Admin"
+    ): Result<Unit> {
+        val reason = reversalReason.trim().ifEmpty { "Payment reversed for correction" }
+        return recordInstallmentPayment(
+            committeeId = committeeId,
+            record = record,
+            newPaidAmount = 0L,
+            newStatus = InstallmentStatus.UNPAID,
+            paymentDate = null,
+            paymentNote = "REVERSED: $reason",
+            actorName = actorName
+        )
+    }
+
+    suspend fun deleteInstallmentSafely(
+        record: InstallmentRecord,
+        currentUser: LocalUser?,
+        adminPassword: String
+    ): Result<Unit> {
+        val authRes = verifyAdminAccess(currentUser, adminPassword)
+        if (authRes.isFailure) return Result.failure(authRes.exceptionOrNull()!!)
+        val admin = authRes.getOrThrow()
+
+        return try {
+            if (record.paidAmount > 0L || record.statusEnum != InstallmentStatus.UNPAID) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Cannot silently delete a recorded payment (${record.memberName}). Use Reverse Payment to reset & keep an audit record."
+                    )
+                )
+            }
+            db.withTransaction {
+                dao.deleteInstallmentById(record.id)
+                insertAuditInternal(
+                    admin.displayName,
+                    "DELETE_INSTALLMENT",
+                    "INSTALLMENT",
+                    "${record.memberName} (${record.monthKey})",
+                    "Removed unpaid installment entry #${record.committeeNumber}"
+                )
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteUnpaidMonthEntriesSafely(
+        committee: Committee,
+        monthKey: String,
+        currentUser: LocalUser?,
+        adminPassword: String
+    ): Result<Pair<Int, Int>> {
+        val authRes = verifyAdminAccess(currentUser, adminPassword)
+        if (authRes.isFailure) return Result.failure(authRes.exceptionOrNull()!!)
+        val admin = authRes.getOrThrow()
+
+        return try {
+            val paidCount = dao.countRecordedPaymentsForMonth(committee.id, monthKey)
+            var deletedCount = 0
+            db.withTransaction {
+                deletedCount = dao.deleteUnpaidInstallmentsForMonth(committee.id, monthKey)
+                insertAuditInternal(
+                    admin.displayName,
+                    "DELETE_MONTH_ENTRIES",
+                    "MONTH",
+                    "${committee.name} ($monthKey)",
+                    "Deleted $deletedCount unpaid entries; preserved $paidCount recorded payment(s)."
+                )
+            }
+            Result.success(deletedCount to paidCount)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Reminder Logs
+    // -------------------------------------------------------------------------
 
     suspend fun logReminderDispatch(
         committeeId: String,
@@ -523,11 +1038,135 @@ class CommitteeRepository(
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Upload Queue (Pending / Completed / Failed / Retry)
+    // -------------------------------------------------------------------------
+
+    suspend fun retryPendingAndFailedUploads(syncWebhookUrl: String, actorName: String = "Admin"): UploadBatchSummary =
+        withContext(Dispatchers.IO) {
+            val items = dao.getRetryableUploadsOnce()
+            if (items.isEmpty()) {
+                return@withContext UploadBatchSummary(0, 0, 0, "No pending or failed uploads.")
+            }
+
+            val url = syncWebhookUrl.trim()
+            if (url.isEmpty()) {
+                val now = System.currentTimeMillis()
+                items.forEach { item ->
+                    dao.updateUploadItem(
+                        item.copy(
+                            status = UploadQueueStatus.FAILED.name,
+                            attempts = item.attempts + 1,
+                            errorMessage = "No Sync Server URL configured in App Settings (use Local Backup Export or enter Sync URL).",
+                            updatedAtMillis = now
+                        )
+                    )
+                }
+                recordAudit(actorName, "RETRY_UPLOAD", "UPLOAD_QUEUE", "${items.size} item(s)", "Marked FAILED: No Sync URL configured")
+                return@withContext UploadBatchSummary(
+                    attempted = items.size,
+                    succeeded = 0,
+                    failed = items.size,
+                    message = "No Sync URL configured. ${items.size} item(s) listed in Failed Uploads — export Local Backup to complete offline sync."
+                )
+            }
+
+            var succeeded = 0
+            var failed = 0
+            for (item in items) {
+                val now = System.currentTimeMillis()
+                try {
+                    val bodyJson = JSONObject().apply {
+                        put("id", item.id)
+                        put("title", item.title)
+                        put("payloadType", item.payloadType)
+                        put("payload", JSONObject(item.payloadJson))
+                    }.toString()
+                    val request = Request.Builder()
+                        .url(url)
+                        .addHeader("Content-Type", "application/json")
+                        .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
+                        .build()
+
+                    httpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            succeeded++
+                            dao.updateUploadItem(
+                                item.copy(
+                                    status = UploadQueueStatus.COMPLETED.name,
+                                    attempts = item.attempts + 1,
+                                    errorMessage = null,
+                                    updatedAtMillis = now
+                                )
+                            )
+                        } else {
+                            failed++
+                            dao.updateUploadItem(
+                                item.copy(
+                                    status = UploadQueueStatus.FAILED.name,
+                                    attempts = item.attempts + 1,
+                                    errorMessage = "HTTP ${response.code}: ${response.message}",
+                                    updatedAtMillis = now
+                                )
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    failed++
+                    dao.updateUploadItem(
+                        item.copy(
+                            status = UploadQueueStatus.FAILED.name,
+                            attempts = item.attempts + 1,
+                            errorMessage = e.localizedMessage ?: "Network error",
+                            updatedAtMillis = now
+                        )
+                    )
+                }
+            }
+            recordAudit(actorName, "RETRY_UPLOAD", "UPLOAD_QUEUE", "${items.size} item(s)", "Succeeded=$succeeded, Failed=$failed")
+            UploadBatchSummary(
+                attempted = items.size,
+                succeeded = succeeded,
+                failed = failed,
+                message = "Upload retry finished: $succeeded completed, $failed failed."
+            )
+        }
+
+    suspend fun markAllRetryableUploadsCompletedLocally(actorName: String = "Admin"): Int {
+        val items = dao.getRetryableUploadsOnce()
+        if (items.isEmpty()) return 0
+        val now = System.currentTimeMillis()
+        db.withTransaction {
+            items.forEach { item ->
+                dao.updateUploadItem(
+                    item.copy(
+                        status = UploadQueueStatus.COMPLETED.name,
+                        errorMessage = null,
+                        updatedAtMillis = now
+                    )
+                )
+            }
+            insertAuditInternal(
+                actorName, "LOCAL_BACKUP_SYNC", "UPLOAD_QUEUE", "${items.size} item(s)",
+                "Synced and marked completed via local backup export"
+            )
+        }
+        return items.size
+    }
+
+    suspend fun clearCompletedUploads() {
+        dao.clearCompletedUploads()
+    }
+
+    // -------------------------------------------------------------------------
+    // JSON Backup & Restore
+    // -------------------------------------------------------------------------
+
     suspend fun exportFullBackupJson(): Result<String> {
         return try {
             val root = JSONObject()
             root.put("brand", "GM HASMANI COMMITTEE MANAGER")
-            root.put("version", 1)
+            root.put("version", 2)
             root.put("exportedAt", MonthUtils.todayDateString())
 
             val committeesArr = JSONArray()
@@ -593,7 +1232,7 @@ class CommitteeRepository(
         }
     }
 
-    suspend fun restoreFromBackupJson(jsonContent: String): Result<Int> {
+    suspend fun restoreFromBackupJson(jsonContent: String, actorName: String = "Admin"): Result<Int> {
         return try {
             val root = JSONObject(jsonContent)
             val committeesArr = root.getJSONArray("committees")
@@ -682,6 +1321,10 @@ class CommitteeRepository(
                     if (instEntities.isNotEmpty()) dao.insertInstallments(instEntities)
                     restoredCount++
                 }
+                insertAuditInternal(
+                    actorName, "RESTORE_BACKUP", "BACKUP", "JSON Restore",
+                    "Restored $restoredCount committee(s) from backup"
+                )
             }
             Result.success(restoredCount)
         } catch (e: CancellationException) {
@@ -689,5 +1332,61 @@ class CommitteeRepository(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private suspend fun recordAudit(
+        actorName: String,
+        actionType: String,
+        targetType: String,
+        targetName: String,
+        details: String
+    ) {
+        insertAuditInternal(actorName, actionType, targetType, targetName, details)
+    }
+
+    private suspend fun insertAuditInternal(
+        actorName: String,
+        actionType: String,
+        targetType: String,
+        targetName: String,
+        details: String
+    ) {
+        dao.insertAuditLog(
+            AuditLogEntity(
+                id = UUID.randomUUID().toString(),
+                actorName = actorName.ifBlank { "Admin" },
+                actionType = actionType,
+                targetType = targetType,
+                targetName = targetName,
+                details = details.take(300),
+                createdAtMillis = System.currentTimeMillis()
+            )
+        )
+    }
+
+    private suspend fun enqueueUploadInternal(
+        title: String,
+        payloadType: String,
+        payload: JSONObject
+    ) {
+        val now = System.currentTimeMillis()
+        dao.insertUploadItem(
+            UploadQueueEntity(
+                id = UUID.randomUUID().toString(),
+                title = title.take(120),
+                payloadType = payloadType,
+                payloadJson = payload.toString(),
+                status = UploadQueueStatus.PENDING.name,
+                errorMessage = null,
+                attempts = 0,
+                createdAtMillis = now,
+                updatedAtMillis = now
+            )
+        )
+    }
+
+    companion object {
+        const val DEFAULT_ADMIN_ID = "admin_default"
+        const val DEFAULT_ADMIN_PIN = "1234"
     }
 }
