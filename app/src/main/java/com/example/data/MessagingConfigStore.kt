@@ -37,8 +37,13 @@ class MessagingConfigStore(private val context: Context) {
         val SMS_GATEWAY_API_KEY = stringPreferencesKey("sms_gateway_api_key")
         val SMS_SENDER_ID = stringPreferencesKey("sms_sender_id")
         val LANGUAGE = stringPreferencesKey("app_language")
+        val ACTIVE_COMMITTEE_ID = stringPreferencesKey("active_committee_id")
         fun templateKey(stage: ReminderStage, lang: AppLanguage) =
             stringPreferencesKey("tpl_${stage.name}_${lang.code}")
+    }
+
+    val activeCommitteeIdFlow: Flow<String?> = context.messagingDataStore.data.map { prefs ->
+        prefs[Keys.ACTIVE_COMMITTEE_ID]?.takeIf { it.isNotBlank() }
     }
 
     val configFlow: Flow<MessagingGatewayConfig> = context.messagingDataStore.data.map { prefs ->
@@ -65,6 +70,16 @@ class MessagingConfigStore(private val context: Context) {
             }
             map
         }
+
+    suspend fun saveActiveCommitteeId(committeeId: String?) {
+        context.messagingDataStore.edit { prefs ->
+            if (committeeId.isNullOrBlank()) {
+                prefs.remove(Keys.ACTIVE_COMMITTEE_ID)
+            } else {
+                prefs[Keys.ACTIVE_COMMITTEE_ID] = committeeId
+            }
+        }
+    }
 
     suspend fun saveGatewayConfig(
         whatsappPhoneNumberId: String,

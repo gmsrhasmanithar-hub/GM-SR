@@ -83,6 +83,7 @@ import com.example.ui.theme.StatusPendingYellow
 import com.example.ui.theme.StatusUnpaidRed
 import com.example.ui.theme.WhatsAppGreen
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
@@ -547,7 +548,7 @@ fun RemindersScreen(
                 Text(strings.reminderLogsTitle, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             }
             items(reminderLogs.take(20), key = { it.id }) { log ->
-                val ts = log.createdAt?.toDate()?.let { timeFmt.format(it) } ?: "Just now"
+                val ts = timeFmt.format(Date(log.createdAtMillis))
                 val statusColor = when (DispatchStatus.fromRaw(log.dispatchStatus)) {
                     DispatchStatus.SENT_API -> StatusPaidGreen
                     DispatchStatus.OPENED_APP -> StatusPendingYellow

@@ -62,6 +62,7 @@ import com.example.ui.theme.StatusPaidGreen
 import com.example.ui.theme.StatusPendingYellow
 import com.example.ui.theme.StatusUnpaidRed
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
@@ -552,7 +553,7 @@ fun RecordPaymentDialog(
                         Text(strings.paymentHistory, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
                     }
                     itemLogs.take(8).forEach { log ->
-                        val tsText = log.createdAt?.toDate()?.let { logTimeFmt.format(it) } ?: "Just now"
+                        val tsText = logTimeFmt.format(Date(log.createdAtMillis))
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
                             shape = RoundedCornerShape(10.dp),
@@ -983,7 +984,7 @@ fun PaymentActivityHistoryDialog(
                     )
                 } else {
                     logs.forEach { log ->
-                        val tsText = log.createdAt?.toDate()?.let { timeFmt.format(it) } ?: "Just now"
+                        val tsText = timeFmt.format(Date(log.createdAtMillis))
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
                             shape = RoundedCornerShape(12.dp),

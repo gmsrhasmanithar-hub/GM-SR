@@ -29,7 +29,6 @@ import com.example.model.PayoutStatus
 import com.example.model.ReminderChannel
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
-import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -40,6 +39,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -59,8 +59,7 @@ enum class InstallmentFilter { ALL, PAID, UNPAID, PARTIAL }
 class CommitteeViewModel(
     private val repository: CommitteeRepository,
     private val configStore: MessagingConfigStore,
-    private val gateway: MessagingGateway,
-    private val currentUserId: String
+    private val gateway: MessagingGateway
 ) : ViewModel() {
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 8)
@@ -85,28 +84,22 @@ class CommitteeViewModel(
     val customTemplates: StateFlow<Map<Pair<ReminderStage, AppLanguage>, String>> = configStore.templatesFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyMap())
 
-    val adminProfile = repository.observeAdminProfile(currentUserId)
-        .catch { error ->
-            unwrapFirestoreError(error, "profile")
-            emit(null)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
-
-    val committeesState: StateFlow<UiState<List<Committee>>> = repository.observeCommittees(currentUserId)
+    val committeesState: StateFlow<UiState<List<Committee>>> = repository.observeCommittees()
         .map<List<Committee>, UiState<List<Committee>>> { UiState.Success(it) }
         .catch { error ->
-            val msg = unwrapFirestoreError(error, "committees")
-            emit(UiState.Error(msg))
+            if (error is CancellationException) throw error
+            Log.w(TAG, "Error observing committees", error)
+            emit(UiState.Error(error.localizedMessage ?: "Failed to load committees"))
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
     val activeCommittee: StateFlow<Committee?> = combine(
         committeesState,
         _selectedCommitteeId,
-        adminProfile
-    ) { state, selectedId, profile ->
+        configStore.activeCommitteeIdFlow
+    ) { state, selectedId, storedId ->
         val list = (state as? UiState.Success)?.data ?: emptyList()
-        val chosen = selectedId ?: profile?.activeCommitteeId
+        val chosen = selectedId ?: storedId
         list.firstOrNull { it.id == chosen }
             ?: list.firstOrNull { it.statusEnum == CommitteeStatus.ACTIVE }
             ?: list.firstOrNull()
@@ -114,45 +107,44 @@ class CommitteeViewModel(
 
     private val activeCommitteeIdFlow = activeCommittee
         .map { it?.id.orEmpty() }
+        .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), "")
 
     val membersState: StateFlow<UiState<List<CommitteeMember>>> = activeCommitteeIdFlow
         .flatMapLatest { cid ->
             if (cid.isBlank()) flowOf<UiState<List<CommitteeMember>>>(UiState.Success(emptyList()))
-            else repository.observeMembers(currentUserId, cid)
+            else repository.observeMembers(cid)
                 .map<List<CommitteeMember>, UiState<List<CommitteeMember>>> { UiState.Success(it) }
-                .catch { error -> emit(UiState.Error(unwrapFirestoreError(error, "members"))) }
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    emit(UiState.Error(error.localizedMessage ?: "Failed to load members"))
+                }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
     val installmentsState: StateFlow<UiState<List<InstallmentRecord>>> = activeCommitteeIdFlow
         .flatMapLatest { cid ->
             if (cid.isBlank()) flowOf<UiState<List<InstallmentRecord>>>(UiState.Success(emptyList()))
-            else repository.observeInstallments(currentUserId, cid)
+            else repository.observeInstallments(cid)
                 .map<List<InstallmentRecord>, UiState<List<InstallmentRecord>>> { UiState.Success(it) }
-                .catch { error -> emit(UiState.Error(unwrapFirestoreError(error, "installments"))) }
+                .catch { error ->
+                    if (error is CancellationException) throw error
+                    emit(UiState.Error(error.localizedMessage ?: "Failed to load installments"))
+                }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), UiState.Loading)
 
     val paymentLogs: StateFlow<List<PaymentHistoryLog>> = activeCommitteeIdFlow
         .flatMapLatest { cid ->
             if (cid.isBlank()) flowOf(emptyList())
-            else repository.observePaymentLogs(currentUserId, cid)
-                .catch { error ->
-                    unwrapFirestoreError(error, "paymentLogs")
-                    emit(emptyList())
-                }
+            else repository.observePaymentLogs(cid).catch { emit(emptyList()) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val reminderLogs: StateFlow<List<ReminderLog>> = activeCommitteeIdFlow
         .flatMapLatest { cid ->
             if (cid.isBlank()) flowOf(emptyList())
-            else repository.observeReminderLogs(currentUserId, cid)
-                .catch { error ->
-                    unwrapFirestoreError(error, "reminderLogs")
-                    emit(emptyList())
-                }
+            else repository.observeReminderLogs(cid).catch { emit(emptyList()) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
@@ -173,9 +165,6 @@ class CommitteeViewModel(
 
     init {
         viewModelScope.launch {
-            repository.ensureAdminProfile(messagingConfig.value.localLanguageCode)
-        }
-        viewModelScope.launch {
             activeCommittee.collect { committee ->
                 if (committee != null) {
                     val months = MonthUtils.monthKeysForCommittee(committee.startMonth, committee.totalMonths.toInt())
@@ -186,16 +175,37 @@ class CommitteeViewModel(
                 }
             }
         }
-    }
 
-    private fun unwrapFirestoreError(error: Throwable, label: String): String {
-        val firestoreError = generateSequence(error) { it.cause }
-            .filterIsInstance<FirebaseFirestoreException>()
-            .firstOrNull()
-        if (firestoreError == null && error is CancellationException) throw error
-        val rootError = firestoreError ?: error
-        Log.w(TAG, "Error observing $label", rootError)
-        return rootError.localizedMessage ?: "Failed to load $label"
+        // Automatically generate missing installment rows for active members in the selected month
+        // so the Payments screen is immediately ready without extra manual steps.
+        viewModelScope.launch {
+            combine(
+                activeCommittee,
+                membersState,
+                installmentsState,
+                _selectedMonthKey
+            ) { committee, mState, iState, monthKey ->
+                if (committee == null || mState !is UiState.Success || iState !is UiState.Success) {
+                    null
+                } else {
+                    val activeMembers = mState.data.filter { it.memberStatusEnum == MemberStatus.ACTIVE }
+                    val existing = iState.data.filter { it.committeeId == committee.id }
+                    val existingIdsForMonth = existing.filter { it.monthKey == monthKey }.map { it.memberId }.toSet()
+                    val missing = activeMembers.filter { it.id !in existingIdsForMonth }
+                    if (missing.isEmpty()) null else Triple(committee, activeMembers to existing, monthKey)
+                }
+            }.collect { payload ->
+                if (payload != null) {
+                    val (committee, lists, monthKey) = payload
+                    val (activeMembers, existing) = lists
+                    val monthKeys = MonthUtils.monthKeysForCommittee(committee.startMonth, committee.totalMonths.toInt())
+                    if (monthKey in monthKeys) {
+                        val monthIndex = (monthKeys.indexOf(monthKey) + 1).coerceAtLeast(1)
+                        repository.syncInstallmentsForMonth(committee, activeMembers, existing, monthKey, monthIndex)
+                    }
+                }
+            }
+        }
     }
 
     private fun computeSummary(
@@ -276,7 +286,7 @@ class CommitteeViewModel(
     fun selectCommittee(committeeId: String) {
         _selectedCommitteeId.value = committeeId
         viewModelScope.launch {
-            repository.updateProfilePreferences(activeCommitteeId = committeeId)
+            configStore.saveActiveCommitteeId(committeeId)
         }
     }
 
@@ -295,7 +305,6 @@ class CommitteeViewModel(
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             configStore.saveLanguage(language)
-            repository.updateProfilePreferences(preferredLanguage = language.code)
         }
     }
 
@@ -320,7 +329,7 @@ class CommitteeViewModel(
             res.onSuccess { newId ->
                 _selectedCommitteeId.value = newId
                 _selectedMonthKey.value = startMonth
-                repository.updateProfilePreferences(activeCommitteeId = newId)
+                configStore.saveActiveCommitteeId(newId)
                 _snackbarEvents.tryEmit("Committee \"$name\" created.")
             }.onFailure {
                 _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to create committee.")
@@ -537,11 +546,11 @@ class CommitteeViewModel(
         val committee = activeCommittee.value ?: return
         val config = messagingConfig.value
         if (useWhatsApp && !config.isWhatsAppApiConfigured) {
-            _snackbarEvents.tryEmit("WhatsApp Cloud API not configured. Use Manual WhatsApp mode or configure API in Settings.")
+            _snackbarEvents.tryEmit("WhatsApp Cloud API not configured. Use Direct WhatsApp mode.")
             return
         }
         if (!useWhatsApp && !config.isSmsGatewayConfigured) {
-            _snackbarEvents.tryEmit("SMS Gateway URL not configured. Use Manual SMS mode or configure Gateway in Settings.")
+            _snackbarEvents.tryEmit("SMS Gateway URL not configured. Use Direct SMS mode.")
             return
         }
 

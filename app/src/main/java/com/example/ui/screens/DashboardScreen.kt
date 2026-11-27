@@ -147,6 +147,17 @@ fun DashboardScreen(
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ic_gm_committee_fg),
+                                        contentDescription = "GM HASMANI Logo",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Surface(
                                     color = GoldAccent,
                                     shape = RoundedCornerShape(8.dp)
                                 ) {

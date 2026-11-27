@@ -1,8 +1,14 @@
 package com.example.data
 
 import android.content.Context
-import com.example.R
-import com.example.model.AdminProfile
+import androidx.room.withTransaction
+import com.example.data.local.AppDatabase
+import com.example.data.local.CommitteeDao
+import com.example.data.local.CommitteeEntity
+import com.example.data.local.InstallmentEntity
+import com.example.data.local.MemberEntity
+import com.example.data.local.PaymentLogEntity
+import com.example.data.local.ReminderLogEntity
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
@@ -16,184 +22,33 @@ import com.example.model.PayoutStatus
 import com.example.model.ReminderChannel
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.DocumentSnapshot
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.Query
-import com.google.firebase.firestore.snapshots
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 class CommitteeRepository(
-    private val db: FirebaseFirestore,
-    private val auth: FirebaseAuth = Firebase.auth
+    private val db: AppDatabase,
+    private val dao: CommitteeDao = db.committeeDao()
 ) {
-    constructor(context: Context) : this(
-        FirebaseFirestore.getInstance(
-            context.applicationContext.getString(R.string.firestore_database_id)
-        )
-    )
+    constructor(context: Context) : this(AppDatabase.getInstance(context))
 
-    private fun requireUserId(): String {
-        return auth.currentUser?.uid?.takeIf { it.isNotBlank() }
-            ?: throw IllegalStateException("Admin must sign in with Google before accessing Firestore.")
-    }
+    fun observeCommittees(): Flow<List<Committee>> =
+        dao.observeCommittees().map { list -> list.map { it.toModel() } }
 
-    private fun userDoc(uid: String) = db.collection("users").document(uid)
-    private fun committeesCol(uid: String) = userDoc(uid).collection("committees")
-    private fun committeeDoc(uid: String, committeeId: String) = committeesCol(uid).document(committeeId)
-    private fun membersCol(uid: String, committeeId: String) = committeeDoc(uid, committeeId).collection("members")
-    private fun installmentsCol(uid: String, committeeId: String) = committeeDoc(uid, committeeId).collection("installments")
-    private fun paymentLogsCol(uid: String, committeeId: String) = committeeDoc(uid, committeeId).collection("paymentLogs")
-    private fun reminderLogsCol(uid: String, committeeId: String) = committeeDoc(uid, committeeId).collection("reminderLogs")
+    fun observeMembers(committeeId: String): Flow<List<CommitteeMember>> =
+        dao.observeMembers(committeeId).map { list -> list.map { it.toModel() } }
 
-    private fun <T> Flow<T>.logFirestoreErrors(uid: String, operation: OperationType, path: String): Flow<T> =
-        catch { error ->
-            val firestoreError = generateSequence(error) { it.cause }
-                .filterIsInstance<FirebaseFirestoreException>()
-                .firstOrNull()
-            if (firestoreError == null && error is CancellationException) throw error
-            val toLog = firestoreError ?: (error as? Exception)
-            if (toLog != null && auth.currentUser?.uid == uid) {
-                handleFirestoreError(toLog, operation, path)
-            }
-            throw error
-        }
+    fun observeInstallments(committeeId: String): Flow<List<InstallmentRecord>> =
+        dao.observeInstallments(committeeId).map { list -> list.map { it.toModel() } }
 
-    fun observeAdminProfile(userId: String): Flow<AdminProfile?> = flow {
-        val path = "users/$userId"
-        emitAll(
-            userDoc(userId).snapshots()
-                .map { snap ->
-                    if (snap.exists()) snap.toObject(AdminProfile::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE)
-                    else null
-                }
-                .logFirestoreErrors(userId, OperationType.GET, path)
-        )
-    }
+    fun observePaymentLogs(committeeId: String): Flow<List<PaymentHistoryLog>> =
+        dao.observePaymentLogs(committeeId).map { list -> list.map { it.toModel() } }
 
-    fun observeCommittees(userId: String): Flow<List<Committee>> = flow {
-        val path = "users/$userId/committees"
-        emitAll(
-            committeesCol(userId)
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .snapshots()
-                .map { snap -> snap.toObjects(Committee::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
-                .logFirestoreErrors(userId, OperationType.LIST, path)
-        )
-    }
-
-    fun observeMembers(userId: String, committeeId: String): Flow<List<CommitteeMember>> = flow {
-        val path = "users/$userId/committees/$committeeId/members"
-        emitAll(
-            membersCol(userId, committeeId)
-                .orderBy("committeeNumber", Query.Direction.ASCENDING)
-                .snapshots()
-                .map { snap -> snap.toObjects(CommitteeMember::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
-                .logFirestoreErrors(userId, OperationType.LIST, path)
-        )
-    }
-
-    fun observeInstallments(userId: String, committeeId: String): Flow<List<InstallmentRecord>> = flow {
-        val path = "users/$userId/committees/$committeeId/installments"
-        emitAll(
-            installmentsCol(userId, committeeId)
-                .snapshots()
-                .map { snap -> snap.toObjects(InstallmentRecord::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
-                .logFirestoreErrors(userId, OperationType.LIST, path)
-        )
-    }
-
-    fun observePaymentLogs(userId: String, committeeId: String): Flow<List<PaymentHistoryLog>> = flow {
-        val path = "users/$userId/committees/$committeeId/paymentLogs"
-        emitAll(
-            paymentLogsCol(userId, committeeId)
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(200)
-                .snapshots()
-                .map { snap -> snap.toObjects(PaymentHistoryLog::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
-                .logFirestoreErrors(userId, OperationType.LIST, path)
-        )
-    }
-
-    fun observeReminderLogs(userId: String, committeeId: String): Flow<List<ReminderLog>> = flow {
-        val path = "users/$userId/committees/$committeeId/reminderLogs"
-        emitAll(
-            reminderLogsCol(userId, committeeId)
-                .orderBy("createdAt", Query.Direction.DESCENDING)
-                .limit(200)
-                .snapshots()
-                .map { snap -> snap.toObjects(ReminderLog::class.java, DocumentSnapshot.ServerTimestampBehavior.ESTIMATE) }
-                .logFirestoreErrors(userId, OperationType.LIST, path)
-        )
-    }
-
-    suspend fun ensureAdminProfile(preferredLanguage: String): Result<Unit> {
-        val uid = auth.currentUser?.uid ?: return Result.failure(IllegalStateException("Not signed in"))
-        val path = "users/$uid"
-        return try {
-            val snap = userDoc(uid).get().await()
-            val currentUser = auth.currentUser!!
-            val displayName = (currentUser.displayName?.takeIf { it.isNotBlank() } ?: "Committee Admin").take(80)
-            val email = (currentUser.email ?: "").take(120)
-            if (!snap.exists()) {
-                val profile = AdminProfile(
-                    userId = uid,
-                    displayName = displayName,
-                    email = email,
-                    preferredLanguage = if (preferredLanguage == "ur") "ur" else "en"
-                )
-                userDoc(uid).set(profile.toCreateMap()).await()
-            } else {
-                userDoc(uid).update(
-                    mapOf(
-                        "displayName" to displayName,
-                        "email" to email,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
-            }
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, path)
-            Result.failure(e)
-        }
-    }
-
-    suspend fun updateProfilePreferences(preferredLanguage: String? = null, activeCommitteeId: String? = null): Result<Unit> {
-        var path = "users/unknown"
-        return try {
-            val uid = requireUserId()
-            path = "users/$uid"
-            val updates = mutableMapOf<String, Any>("updatedAt" to FieldValue.serverTimestamp())
-            if (preferredLanguage != null) {
-                updates["preferredLanguage"] = if (preferredLanguage == "ur") "ur" else "en"
-            }
-            if (activeCommitteeId != null && activeCommitteeId.isNotBlank()) {
-                updates["activeCommitteeId"] = activeCommitteeId.take(128)
-            }
-            userDoc(uid).update(updates).await()
-            Result.success(Unit)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
-            Result.failure(e)
-        }
-    }
+    fun observeReminderLogs(committeeId: String): Flow<List<ReminderLog>> =
+        dao.observeReminderLogs(committeeId).map { list -> list.map { it.toModel() } }
 
     suspend fun createCommittee(
         name: String,
@@ -206,19 +61,18 @@ class CommitteeRepository(
         startMonth: String,
         notes: String?
     ): Result<String> {
-        var path = "users/unknown/committees"
         return try {
-            val uid = requireUserId()
             require(name.trim().isNotEmpty()) { "Committee name is required" }
             require(memberCount in 2L..200L) { "Member count must be between 2 and 200" }
             require(monthlyInstallment in 100L..10_000_000L) { "Installment must be between 100 and 10,000,000" }
             require(totalMonths in 2L..200L) { "Duration must be between 2 and 200 months" }
             require(MonthUtils.isValidMonthKey(startMonth)) { "Start month must be YYYY-MM" }
 
+            val now = System.currentTimeMillis()
+            val id = UUID.randomUUID().toString()
             val endMonth = MonthUtils.addMonths(startMonth, (totalMonths - 1).toInt())
-            val docRef = committeesCol(uid).document()
-            path = docRef.path
-            val committee = Committee(
+            val entity = CommitteeEntity(
+                id = id,
                 name = name.trim().take(80),
                 memberCount = memberCount,
                 monthlyInstallment = monthlyInstallment,
@@ -229,14 +83,15 @@ class CommitteeRepository(
                 startMonth = startMonth,
                 endMonth = endMonth,
                 status = CommitteeStatus.ACTIVE.name,
-                notes = notes?.trim()?.take(500)?.takeIf { it.isNotEmpty() }
+                notes = notes?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
+                createdAtMillis = now,
+                updatedAtMillis = now
             )
-            docRef.set(committee.toCreateMap()).await()
-            Result.success(docRef.id)
+            dao.insertCommittee(entity)
+            Result.success(id)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, path)
             Result.failure(e)
         }
     }
@@ -253,9 +108,7 @@ class CommitteeRepository(
         newStartMonth: String,
         newNotes: String?
     ): Result<Unit> {
-        var path = "users/unknown/committees/${existing.id}"
         return try {
-            val uid = requireUserId()
             require(existing.id.isNotBlank())
             require(newName.trim().isNotEmpty())
             require(newMemberCount in 2L..200L)
@@ -263,95 +116,74 @@ class CommitteeRepository(
             require(newTotalMonths in 2L..200L)
             require(MonthUtils.isValidMonthKey(newStartMonth))
 
+            val now = System.currentTimeMillis()
             val endMonth = MonthUtils.addMonths(newStartMonth, (newTotalMonths - 1).toInt())
-            val cRef = committeeDoc(uid, existing.id)
-            path = cRef.path
-
-            val committeeUpdates = mutableMapOf<String, Any>(
-                "name" to newName.trim().take(80),
-                "memberCount" to newMemberCount,
-                "monthlyInstallment" to newMonthlyInstallment,
-                "totalMonths" to newTotalMonths,
-                "collectionDayStart" to newCollectionDayStart.coerceIn(1L, 31L),
-                "collectionDayEnd" to newCollectionDayEnd.coerceIn(1L, 31L),
-                "payoutDay" to newPayoutDay.coerceIn(1L, 31L),
-                "startMonth" to newStartMonth,
-                "endMonth" to endMonth,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            newNotes?.trim()?.take(500)?.takeIf { it.isNotEmpty() }?.let { committeeUpdates["notes"] = it }
-
-            cRef.update(committeeUpdates).await()
-
-            // Recalculate ONLY future/unpaid records if installment or memberCount changed; NEVER alter past paid records.
             val newPayoutAmount = newMemberCount * newMonthlyInstallment
-            val membersSnap = membersCol(uid, existing.id).get().await()
-            val installmentsSnap = installmentsCol(uid, existing.id).get().await()
 
-            val batch = db.batch()
-            var ops = 0
-            for (mDoc in membersSnap.documents) {
-                val payoutStatus = PayoutStatus.fromRaw(mDoc.getString("payoutStatus"))
-                if (payoutStatus == PayoutStatus.PENDING) {
-                    val number = (mDoc.getLong("committeeNumber") ?: 1L).toInt()
-                    val payoutMonth = MonthUtils.addMonths(newStartMonth, (number - 1).coerceAtLeast(0))
-                    batch.update(
-                        mDoc.reference,
-                        mapOf(
-                            "payoutAmount" to newPayoutAmount,
-                            "payoutMonth" to payoutMonth,
-                            "updatedAt" to FieldValue.serverTimestamp()
-                        )
+            db.withTransaction {
+                dao.updateCommittee(
+                    CommitteeEntity(
+                        id = existing.id,
+                        name = newName.trim().take(80),
+                        memberCount = newMemberCount,
+                        monthlyInstallment = newMonthlyInstallment,
+                        totalMonths = newTotalMonths,
+                        collectionDayStart = newCollectionDayStart.coerceIn(1L, 31L),
+                        collectionDayEnd = newCollectionDayEnd.coerceIn(1L, 31L),
+                        payoutDay = newPayoutDay.coerceIn(1L, 31L),
+                        startMonth = newStartMonth,
+                        endMonth = endMonth,
+                        status = existing.status,
+                        notes = newNotes?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
+                        createdAtMillis = existing.createdAtMillis,
+                        updatedAtMillis = now
                     )
-                    ops++
-                    if (ops >= 400) break
-                }
-            }
+                )
 
-            if (newMonthlyInstallment != existing.monthlyInstallment) {
-                for (iDoc in installmentsSnap.documents) {
-                    val st = InstallmentStatus.fromRaw(iDoc.getString("status"))
-                    val paid = iDoc.getLong("paidAmount") ?: 0L
-                    // Strictly preserve past PAID or partially paid records; only update untouched UNPAID records
-                    if (st == InstallmentStatus.UNPAID && paid == 0L && ops < 440) {
-                        batch.update(
-                            iDoc.reference,
-                            mapOf(
-                                "dueAmount" to newMonthlyInstallment,
-                                "updatedAt" to FieldValue.serverTimestamp()
+                val members = dao.getMembersOnce(existing.id)
+                members.forEach { m ->
+                    if (PayoutStatus.fromRaw(m.payoutStatus) == PayoutStatus.PENDING) {
+                        val payoutMonth = MonthUtils.addMonths(newStartMonth, (m.committeeNumber - 1).toInt().coerceAtLeast(0))
+                        dao.updateMember(
+                            m.copy(
+                                payoutAmount = newPayoutAmount,
+                                payoutMonth = payoutMonth,
+                                updatedAtMillis = now
                             )
                         )
-                        ops++
+                    }
+                }
+
+                if (newMonthlyInstallment != existing.monthlyInstallment) {
+                    val installments = dao.getInstallmentsOnce(existing.id)
+                    installments.forEach { inst ->
+                        val st = InstallmentStatus.fromRaw(inst.status)
+                        if (st == InstallmentStatus.UNPAID && inst.paidAmount == 0L) {
+                            dao.updateInstallment(
+                                inst.copy(
+                                    dueAmount = newMonthlyInstallment,
+                                    updatedAtMillis = now
+                                )
+                            )
+                        }
                     }
                 }
             }
-            if (ops > 0) batch.commit().await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
 
     suspend fun updateCommitteeStatus(committeeId: String, status: CommitteeStatus): Result<Unit> {
-        var path = "users/unknown/committees/$committeeId"
         return try {
-            val uid = requireUserId()
-            val docRef = committeeDoc(uid, committeeId)
-            path = docRef.path
-            docRef.update(
-                mapOf(
-                    "status" to status.name,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            dao.updateCommitteeStatus(committeeId, status.name, System.currentTimeMillis())
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
@@ -362,31 +194,33 @@ class CommitteeRepository(
         phone: String,
         committeeNumber: Long
     ): Result<String> {
-        var path = "users/unknown/committees/${committee.id}/members"
         return try {
-            val uid = requireUserId()
             require(name.trim().isNotEmpty()) { "Member name is required" }
             require(phone.trim().length >= 5) { "Valid mobile number is required" }
             require(committeeNumber in 1L..500L) { "Committee number must be >= 1" }
 
-            val docRef = membersCol(uid, committee.id).document()
-            path = docRef.path
+            val now = System.currentTimeMillis()
+            val memberId = UUID.randomUUID().toString()
             val payoutMonth = MonthUtils.addMonths(committee.startMonth, (committeeNumber - 1).toInt().coerceAtLeast(0))
-            val member = CommitteeMember(
+            val entity = MemberEntity(
+                id = memberId,
+                committeeId = committee.id,
                 name = name.trim().take(80),
                 phone = phone.trim().take(25),
                 committeeNumber = committeeNumber,
                 payoutMonth = payoutMonth,
                 payoutStatus = PayoutStatus.PENDING.name,
+                payoutDate = null,
                 payoutAmount = committee.eachPayoutAmount,
-                status = MemberStatus.ACTIVE.name
+                status = MemberStatus.ACTIVE.name,
+                createdAtMillis = now,
+                updatedAtMillis = now
             )
-            docRef.set(member.toCreateMap()).await()
-            Result.success(docRef.id)
+            dao.insertMember(entity)
+            Result.success(memberId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, path)
             Result.failure(e)
         }
     }
@@ -398,54 +232,56 @@ class CommitteeRepository(
         newPhone: String,
         newCommitteeNumber: Long
     ): Result<Unit> {
-        var path = "users/unknown/committees/${committee.id}/members/${member.id}"
         return try {
-            val uid = requireUserId()
             require(newName.trim().isNotEmpty())
             require(newPhone.trim().length >= 5)
             require(newCommitteeNumber in 1L..500L)
 
-            val docRef = membersCol(uid, committee.id).document(member.id)
-            path = docRef.path
+            val now = System.currentTimeMillis()
+            val cleanName = newName.trim().take(80)
+            val cleanPhone = newPhone.trim().take(25)
             val newPayoutMonth = MonthUtils.addMonths(committee.startMonth, (newCommitteeNumber - 1).toInt().coerceAtLeast(0))
-            docRef.update(
-                mapOf(
-                    "name" to newName.trim().take(80),
-                    "phone" to newPhone.trim().take(25),
-                    "committeeNumber" to newCommitteeNumber,
-                    "payoutMonth" to newPayoutMonth,
-                    "updatedAt" to FieldValue.serverTimestamp()
+            db.withTransaction {
+                dao.updateMember(
+                    MemberEntity(
+                        id = member.id,
+                        committeeId = committee.id,
+                        name = cleanName,
+                        phone = cleanPhone,
+                        committeeNumber = newCommitteeNumber,
+                        payoutMonth = newPayoutMonth,
+                        payoutStatus = member.payoutStatus,
+                        payoutDate = member.payoutDate,
+                        payoutAmount = member.payoutAmount,
+                        status = member.status,
+                        createdAtMillis = member.createdAtMillis,
+                        updatedAtMillis = now
+                    )
                 )
-            ).await()
+                dao.syncMemberSnapshotInInstallments(
+                    committeeId = committee.id,
+                    memberId = member.id,
+                    memberName = cleanName,
+                    memberPhone = cleanPhone,
+                    committeeNumber = newCommitteeNumber,
+                    updatedAtMillis = now
+                )
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
 
-    /**
-     * Soft-archives a member so historical installment and payout records are NEVER erased.
-     */
     suspend fun archiveMember(committeeId: String, memberId: String): Result<Unit> {
-        var path = "users/unknown/committees/$committeeId/members/$memberId"
         return try {
-            val uid = requireUserId()
-            val docRef = membersCol(uid, committeeId).document(memberId)
-            path = docRef.path
-            docRef.update(
-                mapOf(
-                    "status" to MemberStatus.ARCHIVED.name,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            dao.updateMemberStatus(memberId, MemberStatus.ARCHIVED.name, System.currentTimeMillis())
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
@@ -455,36 +291,50 @@ class CommitteeRepository(
         first: CommitteeMember,
         second: CommitteeMember
     ): Result<Unit> {
-        var path = "users/unknown/committees/${committee.id}/members"
         return try {
-            val uid = requireUserId()
-            val col = membersCol(uid, committee.id)
-            path = col.path
-            val batch = db.batch()
+            val now = System.currentTimeMillis()
             val firstNewMonth = MonthUtils.addMonths(committee.startMonth, (second.committeeNumber - 1).toInt().coerceAtLeast(0))
             val secondNewMonth = MonthUtils.addMonths(committee.startMonth, (first.committeeNumber - 1).toInt().coerceAtLeast(0))
-            batch.update(
-                col.document(first.id),
-                mapOf(
-                    "committeeNumber" to second.committeeNumber,
-                    "payoutMonth" to firstNewMonth,
-                    "updatedAt" to FieldValue.serverTimestamp()
+            db.withTransaction {
+                dao.updateMember(
+                    MemberEntity(
+                        id = first.id,
+                        committeeId = committee.id,
+                        name = first.name,
+                        phone = first.phone,
+                        committeeNumber = second.committeeNumber,
+                        payoutMonth = firstNewMonth,
+                        payoutStatus = first.payoutStatus,
+                        payoutDate = first.payoutDate,
+                        payoutAmount = first.payoutAmount,
+                        status = first.status,
+                        createdAtMillis = first.createdAtMillis,
+                        updatedAtMillis = now
+                    )
                 )
-            )
-            batch.update(
-                col.document(second.id),
-                mapOf(
-                    "committeeNumber" to first.committeeNumber,
-                    "payoutMonth" to secondNewMonth,
-                    "updatedAt" to FieldValue.serverTimestamp()
+                dao.updateMember(
+                    MemberEntity(
+                        id = second.id,
+                        committeeId = committee.id,
+                        name = second.name,
+                        phone = second.phone,
+                        committeeNumber = first.committeeNumber,
+                        payoutMonth = secondNewMonth,
+                        payoutStatus = second.payoutStatus,
+                        payoutDate = second.payoutDate,
+                        payoutAmount = second.payoutAmount,
+                        status = second.status,
+                        createdAtMillis = second.createdAtMillis,
+                        updatedAtMillis = now
+                    )
                 )
-            )
-            batch.commit().await()
+                dao.syncMemberSnapshotInInstallments(committee.id, first.id, first.name, first.phone, second.committeeNumber, now)
+                dao.syncMemberSnapshotInInstallments(committee.id, second.id, second.name, second.phone, first.committeeNumber, now)
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
@@ -496,37 +346,39 @@ class CommitteeRepository(
         payoutDate: String?,
         payoutAmount: Long? = null
     ): Result<Unit> {
-        var path = "users/unknown/committees/${committee.id}/members/${member.id}"
         return try {
-            val uid = requireUserId()
-            val docRef = membersCol(uid, committee.id).document(member.id)
-            path = docRef.path
+            val now = System.currentTimeMillis()
             val effectiveAmount = (payoutAmount ?: member.payoutAmount)
                 .takeIf { it > 0L } ?: committee.eachPayoutAmount
-            val payload = mutableMapOf<String, Any>(
-                "payoutStatus" to payoutStatus.name,
-                "payoutAmount" to effectiveAmount.coerceIn(0L, 500_000_000L),
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            if (payoutStatus == PayoutStatus.PAID) {
-                payload["payoutDate"] = (payoutDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString()).take(20)
+            val effectiveDate = if (payoutStatus == PayoutStatus.PAID) {
+                (payoutDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString()).take(20)
             } else {
-                payload["payoutDate"] = FieldValue.delete()
+                null
             }
-            docRef.update(payload).await()
+            dao.updateMember(
+                MemberEntity(
+                    id = member.id,
+                    committeeId = committee.id,
+                    name = member.name,
+                    phone = member.phone,
+                    committeeNumber = member.committeeNumber,
+                    payoutMonth = member.payoutMonth,
+                    payoutStatus = payoutStatus.name,
+                    payoutDate = effectiveDate,
+                    payoutAmount = effectiveAmount.coerceIn(0L, 500_000_000L),
+                    status = member.status,
+                    createdAtMillis = member.createdAtMillis,
+                    updatedAtMillis = now
+                )
+            )
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
 
-    /**
-     * Automatically creates missing monthly installment records for all active members
-     * without overwriting existing records.
-     */
     suspend fun syncInstallmentsForMonth(
         committee: Committee,
         activeMembers: List<CommitteeMember>,
@@ -534,12 +386,7 @@ class CommitteeRepository(
         monthKey: String,
         monthIndex: Int
     ): Result<Int> {
-        var path = "users/unknown/committees/${committee.id}/installments"
         return try {
-            val uid = requireUserId()
-            val col = installmentsCol(uid, committee.id)
-            path = col.path
-
             val existingMemberIds = existingInstallments
                 .filter { it.monthKey == monthKey }
                 .map { it.memberId }
@@ -548,33 +395,32 @@ class CommitteeRepository(
             val missingMembers = activeMembers.filter { it.id !in existingMemberIds }
             if (missingMembers.isEmpty()) return Result.success(0)
 
-            var created = 0
-            val chunks = missingMembers.chunked(400)
-            for (chunk in chunks) {
-                val batch = db.batch()
-                for (member in chunk) {
-                    val safeId = "${member.id.replace(Regex("[^a-zA-Z0-9_\\-]"), "")}_$monthKey".take(128)
-                    val record = InstallmentRecord(
-                        memberId = member.id,
-                        memberName = member.name,
-                        memberPhone = member.phone,
-                        committeeNumber = member.committeeNumber,
-                        monthKey = monthKey,
-                        monthIndex = monthIndex.toLong().coerceAtLeast(1L),
-                        dueAmount = committee.monthlyInstallment,
-                        paidAmount = 0L,
-                        status = InstallmentStatus.UNPAID.name
-                    )
-                    batch.set(col.document(safeId), record.toCreateMap())
-                    created++
-                }
-                batch.commit().await()
+            val now = System.currentTimeMillis()
+            val toInsert = missingMembers.map { member ->
+                val safeId = "${committee.id}_${member.id}_$monthKey".take(128)
+                InstallmentEntity(
+                    id = safeId,
+                    committeeId = committee.id,
+                    memberId = member.id,
+                    memberName = member.name,
+                    memberPhone = member.phone,
+                    committeeNumber = member.committeeNumber,
+                    monthKey = monthKey,
+                    monthIndex = monthIndex.toLong().coerceAtLeast(1L),
+                    dueAmount = committee.monthlyInstallment,
+                    paidAmount = 0L,
+                    status = InstallmentStatus.UNPAID.name,
+                    paymentDate = null,
+                    paymentNote = null,
+                    createdAtMillis = now,
+                    updatedAtMillis = now
+                )
             }
-            Result.success(created)
+            dao.insertInstallments(toInsert)
+            Result.success(toInsert.size)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, path)
             Result.failure(e)
         }
     }
@@ -587,50 +433,57 @@ class CommitteeRepository(
         paymentDate: String?,
         paymentNote: String?
     ): Result<Unit> {
-        var path = "users/unknown/committees/$committeeId/installments/${record.id}"
         return try {
-            val uid = requireUserId()
             require(record.id.isNotBlank())
+            val now = System.currentTimeMillis()
             val clampedPaid = newPaidAmount.coerceIn(0L, 10_000_000L)
             val effectiveDate = when (newStatus) {
                 InstallmentStatus.UNPAID -> null
                 else -> (paymentDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString()).take(20)
             }
-
-            val instRef = installmentsCol(uid, committeeId).document(record.id)
-            path = instRef.path
-            val logRef = paymentLogsCol(uid, committeeId).document()
-
-            val batch = db.batch()
-            val updateMap = mutableMapOf<String, Any>(
-                "paidAmount" to clampedPaid,
-                "status" to newStatus.name,
-                "updatedAt" to FieldValue.serverTimestamp()
-            )
-            if (effectiveDate != null) updateMap["paymentDate"] = effectiveDate
             val cleanNote = paymentNote?.trim()?.take(200)?.takeIf { it.isNotEmpty() }
-            if (cleanNote != null) updateMap["paymentNote"] = cleanNote
 
-            batch.update(instRef, updateMap)
-
-            val log = PaymentHistoryLog(
-                installmentId = record.id,
-                memberId = record.memberId,
-                memberName = record.memberName,
-                monthKey = record.monthKey,
-                previousPaidAmount = record.paidAmount,
-                newPaidAmount = clampedPaid,
-                previousStatus = record.status,
-                newStatus = newStatus.name,
-                actionNote = cleanNote
-            )
-            batch.set(logRef, log.toCreateMap())
-            batch.commit().await()
+            db.withTransaction {
+                dao.updateInstallment(
+                    InstallmentEntity(
+                        id = record.id,
+                        committeeId = committeeId,
+                        memberId = record.memberId,
+                        memberName = record.memberName,
+                        memberPhone = record.memberPhone,
+                        committeeNumber = record.committeeNumber,
+                        monthKey = record.monthKey,
+                        monthIndex = record.monthIndex,
+                        dueAmount = record.dueAmount,
+                        paidAmount = clampedPaid,
+                        status = newStatus.name,
+                        paymentDate = effectiveDate,
+                        paymentNote = cleanNote,
+                        createdAtMillis = record.createdAtMillis,
+                        updatedAtMillis = now
+                    )
+                )
+                dao.insertPaymentLog(
+                    PaymentLogEntity(
+                        id = UUID.randomUUID().toString(),
+                        committeeId = committeeId,
+                        installmentId = record.id,
+                        memberId = record.memberId,
+                        memberName = record.memberName,
+                        monthKey = record.monthKey,
+                        previousPaidAmount = record.paidAmount,
+                        newPaidAmount = clampedPaid,
+                        previousStatus = record.status,
+                        newStatus = newStatus.name,
+                        actionNote = cleanNote,
+                        createdAtMillis = now
+                    )
+                )
+            }
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, path)
             Result.failure(e)
         }
     }
@@ -645,49 +498,41 @@ class CommitteeRepository(
         dispatchStatus: DispatchStatus,
         errorDetail: String? = null
     ): Result<Unit> {
-        var path = "users/unknown/committees/$committeeId/reminderLogs"
         return try {
-            val uid = requireUserId()
-            val docRef = reminderLogsCol(uid, committeeId).document()
-            path = docRef.path
-            val log = ReminderLog(
-                memberId = member.id,
-                memberName = member.name,
-                memberPhone = member.phone,
-                monthKey = monthKey,
-                channel = channel.name,
-                scheduleStage = stage.name,
-                messagePreview = messagePreview.take(500),
-                dispatchStatus = dispatchStatus.name,
-                errorDetail = errorDetail?.take(300)
+            dao.insertReminderLog(
+                ReminderLogEntity(
+                    id = UUID.randomUUID().toString(),
+                    committeeId = committeeId,
+                    memberId = member.id,
+                    memberName = member.name,
+                    memberPhone = member.phone,
+                    monthKey = monthKey,
+                    channel = channel.name,
+                    scheduleStage = stage.name,
+                    messagePreview = messagePreview.trim().take(500).ifEmpty { "Reminder" },
+                    dispatchStatus = dispatchStatus.name,
+                    errorDetail = errorDetail?.trim()?.take(300)?.takeIf { it.isNotEmpty() },
+                    createdAtMillis = System.currentTimeMillis()
+                )
             )
-            docRef.set(log.toCreateMap()).await()
             Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.CREATE, path)
             Result.failure(e)
         }
     }
 
-    /**
-     * Exports all committees, members, installments, payment logs, and reminder logs as JSON.
-     */
     suspend fun exportFullBackupJson(): Result<String> {
-        var path = "users/unknown/committees"
         return try {
-            val uid = requireUserId()
-            path = "users/$uid/committees"
             val root = JSONObject()
             root.put("brand", "GM HASMANI COMMITTEE MANAGER")
             root.put("version", 1)
             root.put("exportedAt", MonthUtils.todayDateString())
 
             val committeesArr = JSONArray()
-            val cSnap = committeesCol(uid).get().await()
-            for (cDoc in cSnap.documents) {
-                val c = cDoc.toObject(Committee::class.java) ?: continue
+            val committees = dao.getAllCommitteesOnce()
+            for (c in committees) {
                 val cJson = JSONObject().apply {
                     put("id", c.id)
                     put("name", c.name)
@@ -704,8 +549,7 @@ class CommitteeRepository(
                 }
 
                 val membersArr = JSONArray()
-                membersCol(uid, c.id).get().await().documents.forEach { mDoc ->
-                    val m = mDoc.toObject(CommitteeMember::class.java) ?: return@forEach
+                dao.getMembersOnce(c.id).forEach { m ->
                     membersArr.put(JSONObject().apply {
                         put("id", m.id)
                         put("name", m.name)
@@ -721,8 +565,7 @@ class CommitteeRepository(
                 cJson.put("members", membersArr)
 
                 val instArr = JSONArray()
-                installmentsCol(uid, c.id).get().await().documents.forEach { iDoc ->
-                    val i = iDoc.toObject(InstallmentRecord::class.java) ?: return@forEach
+                dao.getInstallmentsOnce(c.id).forEach { i ->
                     instArr.put(JSONObject().apply {
                         put("id", i.id)
                         put("memberId", i.memberId)
@@ -746,99 +589,104 @@ class CommitteeRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.LIST, path)
             Result.failure(e)
         }
     }
 
-    /**
-     * Restores committees, members, and installments from a previously exported JSON backup.
-     */
     suspend fun restoreFromBackupJson(jsonContent: String): Result<Int> {
-        var path = "users/unknown/committees"
         return try {
-            val uid = requireUserId()
-            path = "users/$uid/committees"
             val root = JSONObject(jsonContent)
             val committeesArr = root.getJSONArray("committees")
             var restoredCount = 0
+            val now = System.currentTimeMillis()
 
-            for (idx in 0 until committeesArr.length()) {
-                val cObj = committeesArr.getJSONObject(idx)
-                val rawCid = cObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
-                val cRef = if (rawCid.isNotBlank()) committeesCol(uid).document(rawCid.take(128))
-                else committeesCol(uid).document()
+            db.withTransaction {
+                for (idx in 0 until committeesArr.length()) {
+                    val cObj = committeesArr.getJSONObject(idx)
+                    val cid = cObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                        .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                    val memberCount = cObj.optLong("memberCount", 10L).coerceIn(2L, 200L)
+                    val monthlyInstallment = cObj.optLong("monthlyInstallment", 5000L).coerceIn(100L, 10_000_000L)
 
-                val committee = Committee(
-                    name = cObj.getString("name").take(80),
-                    memberCount = cObj.optLong("memberCount", 10L).coerceIn(2L, 200L),
-                    monthlyInstallment = cObj.optLong("monthlyInstallment", 5000L).coerceIn(100L, 10_000_000L),
-                    totalMonths = cObj.optLong("totalMonths", 10L).coerceIn(2L, 200L),
-                    collectionDayStart = cObj.optLong("collectionDayStart", 28L).coerceIn(1L, 31L),
-                    collectionDayEnd = cObj.optLong("collectionDayEnd", 8L).coerceIn(1L, 31L),
-                    payoutDay = cObj.optLong("payoutDay", 10L).coerceIn(1L, 31L),
-                    startMonth = cObj.optString("startMonth", MonthUtils.currentMonthKey()),
-                    endMonth = cObj.optString("endMonth", MonthUtils.currentMonthKey()),
-                    status = CommitteeStatus.fromRaw(cObj.optString("status")).name,
-                    notes = cObj.optString("notes").takeIf { it.isNotBlank() }
-                )
-
-                val ops = mutableListOf<Pair<com.google.firebase.firestore.DocumentReference, Map<String, Any>>>()
-                ops.add(cRef to committee.toCreateMap())
-
-                val membersArr = cObj.optJSONArray("members") ?: JSONArray()
-                for (mIdx in 0 until membersArr.length()) {
-                    val mObj = membersArr.getJSONObject(mIdx)
-                    val rawMid = mObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
-                    val mRef = if (rawMid.isNotBlank()) membersCol(uid, cRef.id).document(rawMid.take(128))
-                    else membersCol(uid, cRef.id).document()
-                    val member = CommitteeMember(
-                        name = mObj.getString("name").take(80),
-                        phone = mObj.getString("phone").take(25),
-                        committeeNumber = mObj.optLong("committeeNumber", 1L).coerceIn(1L, 500L),
-                        payoutMonth = mObj.optString("payoutMonth", committee.startMonth),
-                        payoutStatus = PayoutStatus.fromRaw(mObj.optString("payoutStatus")).name,
-                        payoutDate = mObj.optString("payoutDate").takeIf { it.isNotBlank() },
-                        payoutAmount = mObj.optLong("payoutAmount", committee.eachPayoutAmount).coerceAtLeast(0L),
-                        status = MemberStatus.fromRaw(mObj.optString("status")).name
+                    val committeeEntity = CommitteeEntity(
+                        id = cid,
+                        name = cObj.getString("name").take(80),
+                        memberCount = memberCount,
+                        monthlyInstallment = monthlyInstallment,
+                        totalMonths = cObj.optLong("totalMonths", 10L).coerceIn(2L, 200L),
+                        collectionDayStart = cObj.optLong("collectionDayStart", 28L).coerceIn(1L, 31L),
+                        collectionDayEnd = cObj.optLong("collectionDayEnd", 8L).coerceIn(1L, 31L),
+                        payoutDay = cObj.optLong("payoutDay", 10L).coerceIn(1L, 31L),
+                        startMonth = cObj.optString("startMonth", MonthUtils.currentMonthKey()),
+                        endMonth = cObj.optString("endMonth", MonthUtils.currentMonthKey()),
+                        status = CommitteeStatus.fromRaw(cObj.optString("status")).name,
+                        notes = cObj.optString("notes").takeIf { it.isNotBlank() },
+                        createdAtMillis = now,
+                        updatedAtMillis = now
                     )
-                    ops.add(mRef to member.toCreateMap())
-                }
+                    dao.insertCommittee(committeeEntity)
 
-                val instArr = cObj.optJSONArray("installments") ?: JSONArray()
-                for (iIdx in 0 until instArr.length()) {
-                    val iObj = instArr.getJSONObject(iIdx)
-                    val rawIid = iObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
-                    val iRef = if (rawIid.isNotBlank()) installmentsCol(uid, cRef.id).document(rawIid.take(128))
-                    else installmentsCol(uid, cRef.id).document()
-                    val rec = InstallmentRecord(
-                        memberId = iObj.getString("memberId").take(128),
-                        memberName = iObj.getString("memberName").take(80),
-                        memberPhone = iObj.getString("memberPhone").take(25),
-                        committeeNumber = iObj.optLong("committeeNumber", 1L).coerceIn(1L, 500L),
-                        monthKey = iObj.getString("monthKey"),
-                        monthIndex = iObj.optLong("monthIndex", 1L).coerceIn(1L, 500L),
-                        dueAmount = iObj.optLong("dueAmount", committee.monthlyInstallment).coerceIn(100L, 10_000_000L),
-                        paidAmount = iObj.optLong("paidAmount", 0L).coerceIn(0L, 10_000_000L),
-                        status = InstallmentStatus.fromRaw(iObj.optString("status")).name,
-                        paymentDate = iObj.optString("paymentDate").takeIf { it.isNotBlank() },
-                        paymentNote = iObj.optString("paymentNote").takeIf { it.isNotBlank() }
-                    )
-                    ops.add(iRef to rec.toCreateMap())
-                }
+                    val membersArr = cObj.optJSONArray("members") ?: JSONArray()
+                    val memberEntities = buildList {
+                        for (mIdx in 0 until membersArr.length()) {
+                            val mObj = membersArr.getJSONObject(mIdx)
+                            val mid = mObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                                .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                            add(
+                                MemberEntity(
+                                    id = mid,
+                                    committeeId = cid,
+                                    name = mObj.getString("name").take(80),
+                                    phone = mObj.getString("phone").take(25),
+                                    committeeNumber = mObj.optLong("committeeNumber", 1L).coerceIn(1L, 500L),
+                                    payoutMonth = mObj.optString("payoutMonth", committeeEntity.startMonth),
+                                    payoutStatus = PayoutStatus.fromRaw(mObj.optString("payoutStatus")).name,
+                                    payoutDate = mObj.optString("payoutDate").takeIf { it.isNotBlank() },
+                                    payoutAmount = mObj.optLong("payoutAmount", memberCount * monthlyInstallment).coerceAtLeast(0L),
+                                    status = MemberStatus.fromRaw(mObj.optString("status")).name,
+                                    createdAtMillis = now,
+                                    updatedAtMillis = now
+                                )
+                            )
+                        }
+                    }
+                    if (memberEntities.isNotEmpty()) dao.insertMembers(memberEntities)
 
-                for (chunk in ops.chunked(400)) {
-                    val batch = db.batch()
-                    chunk.forEach { (ref, payload) -> batch.set(ref, payload) }
-                    batch.commit().await()
+                    val instArr = cObj.optJSONArray("installments") ?: JSONArray()
+                    val instEntities = buildList {
+                        for (iIdx in 0 until instArr.length()) {
+                            val iObj = instArr.getJSONObject(iIdx)
+                            val iid = iObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                                .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                            add(
+                                InstallmentEntity(
+                                    id = iid,
+                                    committeeId = cid,
+                                    memberId = iObj.getString("memberId").take(128),
+                                    memberName = iObj.getString("memberName").take(80),
+                                    memberPhone = iObj.getString("memberPhone").take(25),
+                                    committeeNumber = iObj.optLong("committeeNumber", 1L).coerceIn(1L, 500L),
+                                    monthKey = iObj.getString("monthKey"),
+                                    monthIndex = iObj.optLong("monthIndex", 1L).coerceIn(1L, 500L),
+                                    dueAmount = iObj.optLong("dueAmount", monthlyInstallment).coerceIn(100L, 10_000_000L),
+                                    paidAmount = iObj.optLong("paidAmount", 0L).coerceIn(0L, 10_000_000L),
+                                    status = InstallmentStatus.fromRaw(iObj.optString("status")).name,
+                                    paymentDate = iObj.optString("paymentDate").takeIf { it.isNotBlank() },
+                                    paymentNote = iObj.optString("paymentNote").takeIf { it.isNotBlank() },
+                                    createdAtMillis = now,
+                                    updatedAtMillis = now
+                                )
+                            )
+                        }
+                    }
+                    if (instEntities.isNotEmpty()) dao.insertInstallments(instEntities)
+                    restoredCount++
                 }
-                restoredCount++
             }
             Result.success(restoredCount)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, path)
             Result.failure(e)
         }
     }

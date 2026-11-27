@@ -7,17 +7,22 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Assessment
 import androidx.compose.material.icons.rounded.Dashboard
@@ -38,13 +43,12 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,22 +57,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
-import com.example.auth.AuthScreen
-import com.example.auth.signOutUser
 import com.example.data.CommitteeRepository
 import com.example.data.MessagingConfigStore
 import com.example.data.MessagingGateway
+import com.example.data.MessagingGatewayConfig
+import com.example.data.PdfReportType
 import com.example.i18n.AppLanguage
 import com.example.i18n.stringsFor
 import com.example.model.BackupPreview
@@ -97,11 +102,6 @@ import com.example.ui.screens.RemindersScreen
 import com.example.ui.theme.CommitteeManagerTheme
 import com.example.viewmodel.CommitteeViewModel
 import com.example.viewmodel.UiState
-import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.auth
-import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -120,36 +120,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             val configStore = remember(context) { MessagingConfigStore(context.applicationContext) }
-            val config by configStore.configFlow.collectAsStateWithLifecycle(initialValue = com.example.data.MessagingGatewayConfig())
+            val config by configStore.configFlow.collectAsStateWithLifecycle(initialValue = MessagingGatewayConfig())
             val localLanguage = if (config.localLanguageCode == "ur") AppLanguage.UR else AppLanguage.EN
 
-            var currentUser by remember { mutableStateOf(Firebase.auth.currentUser) }
-            DisposableEffect(Unit) {
-                val listener = FirebaseAuth.AuthStateListener { auth ->
-                    currentUser = auth.currentUser
-                }
-                Firebase.auth.addAuthStateListener(listener)
-                onDispose { Firebase.auth.removeAuthStateListener(listener) }
-            }
-
-            val scope = rememberCoroutineScope()
             CommitteeManagerTheme(isUrdu = localLanguage == AppLanguage.UR) {
-                val user = currentUser
-                if (user == null) {
-                    AuthScreen(
-                        language = localLanguage,
-                        onLanguageChange = { lang -> scope.launch { configStore.saveLanguage(lang) } },
-                        onAuthSuccess = { currentUser = Firebase.auth.currentUser }
-                    )
-                } else {
-                    key(user.uid) {
-                        MainFeatureShell(
-                            currentUserId = user.uid,
-                            userEmail = user.email.orEmpty(),
-                            initialLanguage = localLanguage
-                        )
-                    }
-                }
+                MainFeatureShell(initialLanguage = localLanguage)
             }
         }
     }
@@ -158,26 +133,19 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainFeatureShell(
-    currentUserId: String,
-    userEmail: String,
     initialLanguage: AppLanguage
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val credentialManager = remember(context) { CredentialManager.create(context) }
 
     val viewModel: CommitteeViewModel = viewModel(
-        key = currentUserId,
         factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
-                val databaseId = app.getString(R.string.firestore_database_id)
-                val db = FirebaseFirestore.getInstance(databaseId)
                 CommitteeViewModel(
-                    repository = CommitteeRepository(db),
+                    repository = CommitteeRepository(app),
                     configStore = MessagingConfigStore(app),
-                    gateway = MessagingGateway(),
-                    currentUserId = currentUserId
+                    gateway = MessagingGateway()
                 )
             }
         }
@@ -195,10 +163,9 @@ fun MainFeatureShell(
     val installmentFilter by viewModel.installmentFilter.collectAsStateWithLifecycle()
     val gatewayConfig by viewModel.messagingConfig.collectAsStateWithLifecycle()
     val customTemplates by viewModel.customTemplates.collectAsStateWithLifecycle()
-    val adminProfile by viewModel.adminProfile.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
 
-    val effectiveLang = when (adminProfile?.preferredLanguage ?: gatewayConfig.localLanguageCode) {
+    val effectiveLang = when (gatewayConfig.localLanguageCode) {
         "ur" -> AppLanguage.UR
         else -> initialLanguage
     }
@@ -261,7 +228,7 @@ fun MainFeatureShell(
                         scope.launch { snackbarHostState.showSnackbar("Invalid GM HASMANI backup JSON file.") }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 scope.launch { snackbarHostState.showSnackbar("Could not read backup file.") }
             }
         }
@@ -286,13 +253,30 @@ fun MainFeatureShell(
                 Column {
                     CenterAlignedTopAppBar(
                         title = {
-                            Text(
-                                text = strings.appTitle,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ic_gm_committee_fg),
+                                        contentDescription = "GM HASMANI Logo",
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = strings.appTitle,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         },
                         actions = {
                             FilterChip(
@@ -359,8 +343,7 @@ fun MainFeatureShell(
                 }
 
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize(),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.TopCenter
                 ) {
                     Box(modifier = Modifier.widthIn(max = 760.dp).fillMaxSize()) {
@@ -477,7 +460,6 @@ fun MainFeatureShell(
                                     MainTab.REPORTS -> HistoryReportsSettingsScreen(
                                         strings = strings,
                                         language = effectiveLang,
-                                        adminEmail = userEmail,
                                         committees = committees,
                                         activeCommittee = activeCommittee,
                                         members = members,
@@ -506,8 +488,7 @@ fun MainFeatureShell(
                                         onRestoreBackupJson = {
                                             restoreBackupLauncher.launch(arrayOf("application/json", "*/*"))
                                         },
-                                        onOpenGatewayConfig = { showGatewayConfig = true },
-                                        onSignOut = { signOutUser(credentialManager, scope) }
+                                        onOpenGatewayConfig = { showGatewayConfig = true }
                                     )
                                 }
                             }
@@ -601,7 +582,7 @@ fun MainFeatureShell(
             installments = installments,
             onDismiss = { memberToDetail = null },
             onExportPdf = {
-                viewModel.generateAndOpenPdf(context, com.example.data.PdfReportType.INDIVIDUAL_HISTORY, m, false)
+                viewModel.generateAndOpenPdf(context, PdfReportType.INDIVIDUAL_HISTORY, m, false)
             },
             onOpenWhatsApp = {
                 viewModel.launchManualDispatch(context, m, amt, true, ReminderStage.CUSTOM, tpl)

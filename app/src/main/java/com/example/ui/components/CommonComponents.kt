@@ -461,15 +461,35 @@ fun EmptyCommitteePrompt(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.img_committee_empty),
-                contentDescription = "Create committee illustration",
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(170.dp)
-                    .clip(RoundedCornerShape(18.dp)),
-                contentScale = ContentScale.Crop
-            )
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.img_committee_empty),
+                    contentDescription = "Create committee illustration",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(18.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    shadowElevation = 6.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 10.dp)
+                        .size(64.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_gm_committee_fg),
+                        contentDescription = "GM HASMANI Logo",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
             Text(
                 text = strings.noCommitteeTitle,
                 style = MaterialTheme.typography.headlineSmall,

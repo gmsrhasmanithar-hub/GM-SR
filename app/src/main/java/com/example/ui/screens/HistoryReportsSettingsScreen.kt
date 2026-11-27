@@ -17,7 +17,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Backup
@@ -62,7 +61,6 @@ import com.example.ui.components.CommitteeStatusBadge
 fun HistoryReportsSettingsScreen(
     strings: UiStrings,
     language: AppLanguage,
-    adminEmail: String,
     committees: List<Committee>,
     activeCommittee: Committee?,
     members: List<CommitteeMember>,
@@ -74,8 +72,7 @@ fun HistoryReportsSettingsScreen(
     onExportPdf: (PdfReportType, CommitteeMember?, Boolean) -> Unit,
     onExportBackupJson: () -> Unit,
     onRestoreBackupJson: () -> Unit,
-    onOpenGatewayConfig: () -> Unit,
-    onSignOut: () -> Unit
+    onOpenGatewayConfig: () -> Unit
 ) {
     var selectedMemberForReport by remember(members) {
         mutableStateOf(members.firstOrNull())
@@ -303,28 +300,6 @@ fun HistoryReportsSettingsScreen(
                                     label = { Text(lang.label) }
                                 )
                             }
-                        }
-                    }
-
-                    HorizontalDivider()
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Admin Account", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(adminEmail.ifBlank { "Signed in with Google" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                        }
-                        OutlinedButton(
-                            onClick = onSignOut,
-                            modifier = Modifier.testTag("sign_out_button"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.AutoMirrored.Rounded.Logout, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(strings.signOut)
                         }
                     }
                 }

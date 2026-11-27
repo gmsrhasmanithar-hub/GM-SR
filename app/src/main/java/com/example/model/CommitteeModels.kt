@@ -1,11 +1,5 @@
 package com.example.model
 
-import androidx.annotation.Keep
-import com.google.firebase.Timestamp
-import com.google.firebase.firestore.DocumentId
-import com.google.firebase.firestore.FieldValue
-import com.google.firebase.firestore.IgnoreExtraProperties
-import com.google.firebase.firestore.ServerTimestamp
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -113,33 +107,8 @@ enum class DispatchStatus {
     }
 }
 
-@Keep
-@IgnoreExtraProperties
-data class AdminProfile(
-    @DocumentId val id: String = "",
-    val userId: String = "",
-    val displayName: String = "",
-    val email: String = "",
-    val preferredLanguage: String = "en",
-    val activeCommitteeId: String? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
-) {
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "userId" to userId,
-        "displayName" to displayName.take(80),
-        "email" to email.take(120),
-        "preferredLanguage" to (if (preferredLanguage == "ur") "ur" else "en"),
-        "activeCommitteeId" to activeCommitteeId?.takeIf { it.isNotBlank() },
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    ).filterValues { it != null }.mapValues { it.value!! }
-}
-
-@Keep
-@IgnoreExtraProperties
 data class Committee(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val name: String = "",
     val memberCount: Long = 10L,
     val monthlyInstallment: Long = 5000L,
@@ -151,35 +120,18 @@ data class Committee(
     val endMonth: String = MonthUtils.addMonths(MonthUtils.currentMonthKey(), 9),
     val status: String = CommitteeStatus.ACTIVE.name,
     val notes: String? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     val statusEnum: CommitteeStatus get() = CommitteeStatus.fromRaw(status)
     val monthlyCollectionTotal: Long get() = memberCount * monthlyInstallment
     val totalCommitteeAmount: Long get() = monthlyCollectionTotal * totalMonths
     val eachPayoutAmount: Long get() = monthlyCollectionTotal
-
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "name" to name.trim().take(80),
-        "memberCount" to memberCount.coerceIn(2L, 200L),
-        "monthlyInstallment" to monthlyInstallment.coerceIn(100L, 10000000L),
-        "totalMonths" to totalMonths.coerceIn(2L, 200L),
-        "collectionDayStart" to collectionDayStart.coerceIn(1L, 31L),
-        "collectionDayEnd" to collectionDayEnd.coerceIn(1L, 31L),
-        "payoutDay" to payoutDay.coerceIn(1L, 31L),
-        "startMonth" to startMonth,
-        "endMonth" to endMonth,
-        "status" to statusEnum.name,
-        "notes" to notes?.trim()?.take(500)?.takeIf { it.isNotEmpty() },
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    ).filterValues { it != null }.mapValues { it.value!! }
 }
 
-@Keep
-@IgnoreExtraProperties
 data class CommitteeMember(
-    @DocumentId val id: String = "",
+    val id: String = "",
+    val committeeId: String = "",
     val name: String = "",
     val phone: String = "",
     val committeeNumber: Long = 1L,
@@ -188,30 +140,16 @@ data class CommitteeMember(
     val payoutDate: String? = null,
     val payoutAmount: Long = 0L,
     val status: String = MemberStatus.ACTIVE.name,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     val payoutStatusEnum: PayoutStatus get() = PayoutStatus.fromRaw(payoutStatus)
     val memberStatusEnum: MemberStatus get() = MemberStatus.fromRaw(status)
-
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "name" to name.trim().take(80),
-        "phone" to phone.trim().take(25),
-        "committeeNumber" to committeeNumber.coerceIn(1L, 500L),
-        "payoutMonth" to payoutMonth,
-        "payoutStatus" to payoutStatusEnum.name,
-        "payoutDate" to payoutDate?.trim()?.take(20)?.takeIf { it.isNotEmpty() },
-        "payoutAmount" to payoutAmount.coerceAtLeast(0L),
-        "status" to memberStatusEnum.name,
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    ).filterValues { it != null }.mapValues { it.value!! }
 }
 
-@Keep
-@IgnoreExtraProperties
 data class InstallmentRecord(
-    @DocumentId val id: String = "",
+    val id: String = "",
+    val committeeId: String = "",
     val memberId: String = "",
     val memberName: String = "",
     val memberPhone: String = "",
@@ -223,33 +161,16 @@ data class InstallmentRecord(
     val status: String = InstallmentStatus.UNPAID.name,
     val paymentDate: String? = null,
     val paymentNote: String? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     val statusEnum: InstallmentStatus get() = InstallmentStatus.fromRaw(status)
     val remainingAmount: Long get() = (dueAmount - paidAmount).coerceAtLeast(0L)
-
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "memberId" to memberId,
-        "memberName" to memberName.trim().take(80),
-        "memberPhone" to memberPhone.trim().take(25),
-        "committeeNumber" to committeeNumber.coerceIn(1L, 500L),
-        "monthKey" to monthKey,
-        "monthIndex" to monthIndex.coerceIn(1L, 500L),
-        "dueAmount" to dueAmount.coerceIn(100L, 10000000L),
-        "paidAmount" to paidAmount.coerceIn(0L, 10000000L),
-        "status" to statusEnum.name,
-        "paymentDate" to paymentDate?.trim()?.take(20)?.takeIf { it.isNotEmpty() },
-        "paymentNote" to paymentNote?.trim()?.take(200)?.takeIf { it.isNotEmpty() },
-        "createdAt" to FieldValue.serverTimestamp(),
-        "updatedAt" to FieldValue.serverTimestamp()
-    ).filterValues { it != null }.mapValues { it.value!! }
 }
 
-@Keep
-@IgnoreExtraProperties
 data class PaymentHistoryLog(
-    @DocumentId val id: String = "",
+    val id: String = "",
+    val committeeId: String = "",
     val installmentId: String = "",
     val memberId: String = "",
     val memberName: String = "",
@@ -259,26 +180,12 @@ data class PaymentHistoryLog(
     val previousStatus: String = InstallmentStatus.UNPAID.name,
     val newStatus: String = InstallmentStatus.PAID.name,
     val actionNote: String? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null
-) {
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "installmentId" to installmentId,
-        "memberId" to memberId,
-        "memberName" to memberName.trim().take(80),
-        "monthKey" to monthKey,
-        "previousPaidAmount" to previousPaidAmount.coerceAtLeast(0L),
-        "newPaidAmount" to newPaidAmount.coerceAtLeast(0L),
-        "previousStatus" to InstallmentStatus.fromRaw(previousStatus).name,
-        "newStatus" to InstallmentStatus.fromRaw(newStatus).name,
-        "actionNote" to actionNote?.trim()?.take(200)?.takeIf { it.isNotEmpty() },
-        "createdAt" to FieldValue.serverTimestamp()
-    ).filterValues { it != null }.mapValues { it.value!! }
-}
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
 
-@Keep
-@IgnoreExtraProperties
 data class ReminderLog(
-    @DocumentId val id: String = "",
+    val id: String = "",
+    val committeeId: String = "",
     val memberId: String = "",
     val memberName: String = "",
     val memberPhone: String = "",
@@ -288,21 +195,8 @@ data class ReminderLog(
     val messagePreview: String = "",
     val dispatchStatus: String = DispatchStatus.OPENED_APP.name,
     val errorDetail: String? = null,
-    @ServerTimestamp val createdAt: Timestamp? = null
-) {
-    fun toCreateMap(): Map<String, Any> = mapOf(
-        "memberId" to memberId,
-        "memberName" to memberName.trim().take(80),
-        "memberPhone" to memberPhone.trim().take(25),
-        "monthKey" to monthKey,
-        "channel" to ReminderChannel.fromRaw(channel).name,
-        "scheduleStage" to ReminderStage.fromRaw(scheduleStage).name,
-        "messagePreview" to messagePreview.trim().take(500).ifEmpty { "Reminder" },
-        "dispatchStatus" to DispatchStatus.fromRaw(dispatchStatus).name,
-        "errorDetail" to errorDetail?.trim()?.take(300)?.takeIf { it.isNotEmpty() },
-        "createdAt" to FieldValue.serverTimestamp()
-    ).filterValues { it != null }.mapValues { it.value!! }
-}
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
 
 data class MonthlyChartPoint(
     val monthKey: String,
@@ -378,17 +272,12 @@ object MonthUtils {
     }
 
     fun formatPayoutDate(monthKey: String, payoutDay: Long, startDay: Long): String {
-        // If collection spans 28th to 8th of next month, payout is on payoutDay of the next month if payoutDay < startDay
         val targetMonth = if (payoutDay < startDay) addMonths(monthKey, 1) else monthKey
         return "$payoutDay ${formatMonthDisplay(targetMonth)}"
     }
 }
 
 object PhoneUtils {
-    /**
-     * Normalizes Pakistani and international mobile numbers to digits without '+' for wa.me & Cloud API.
-     * Example: "0300-1234567" -> "923001234567", "+92 300 1234567" -> "923001234567".
-     */
     fun toWhatsAppDigits(rawPhone: String): String {
         val digits = rawPhone.filter { it.isDigit() }
         return when {
@@ -506,4 +395,3 @@ object BackupUtils {
         }
     }
 }
-
