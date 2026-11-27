@@ -1,0 +1,221 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidMonthKey(val) {
+      return val is string && val.matches('^[0-9]{4}-(0[1-9]|1[0-2])$');
+    }
+
+    function committeeExists(userId, committeeId) {
+      return exists(/databases/$(database)/documents/users/$(userId)/committees/$(committeeId)) ||
+             existsAfter(/databases/$(database)/documents/users/$(userId)/committees/$(committeeId));
+    }
+
+    function isValidAdminProfile(data, userId) {
+      return data.userId is string && data.userId == userId &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 80 &&
+             data.email is string && data.email.size() <= 120 &&
+             data.preferredLanguage in ['en', 'ur'] &&
+             (!('activeCommitteeId' in data) || (data.activeCommitteeId is string && data.activeCommitteeId.size() <= 128)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCommittee(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.memberCount is int && data.memberCount >= 2 && data.memberCount <= 200 &&
+             data.monthlyInstallment is int && data.monthlyInstallment >= 100 && data.monthlyInstallment <= 10000000 &&
+             data.totalMonths is int && data.totalMonths >= 2 && data.totalMonths <= 200 &&
+             data.collectionDayStart is int && data.collectionDayStart >= 1 && data.collectionDayStart <= 31 &&
+             data.collectionDayEnd is int && data.collectionDayEnd >= 1 && data.collectionDayEnd <= 31 &&
+             data.payoutDay is int && data.payoutDay >= 1 && data.payoutDay <= 31 &&
+             isValidMonthKey(data.startMonth) &&
+             isValidMonthKey(data.endMonth) &&
+             data.status in ['ACTIVE', 'COMPLETED', 'ARCHIVED'] &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 500)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidMember(data) {
+      return data.name is string && data.name.size() >= 1 && data.name.size() <= 80 &&
+             data.phone is string && data.phone.size() >= 5 && data.phone.size() <= 25 &&
+             data.committeeNumber is int && data.committeeNumber >= 1 && data.committeeNumber <= 500 &&
+             isValidMonthKey(data.payoutMonth) &&
+             data.payoutStatus in ['PENDING', 'PAID'] &&
+             data.payoutAmount is int && data.payoutAmount >= 0 && data.payoutAmount <= 500000000 &&
+             data.status in ['ACTIVE', 'ARCHIVED'] &&
+             (!('payoutDate' in data) || (data.payoutDate is string && data.payoutDate.size() <= 20)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidInstallment(data) {
+      return data.memberId is string && data.memberId.size() >= 1 && data.memberId.size() <= 128 &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 80 &&
+             data.memberPhone is string && data.memberPhone.size() >= 5 && data.memberPhone.size() <= 25 &&
+             data.committeeNumber is int && data.committeeNumber >= 1 && data.committeeNumber <= 500 &&
+             isValidMonthKey(data.monthKey) &&
+             data.monthIndex is int && data.monthIndex >= 1 && data.monthIndex <= 500 &&
+             data.dueAmount is int && data.dueAmount >= 100 && data.dueAmount <= 10000000 &&
+             data.paidAmount is int && data.paidAmount >= 0 && data.paidAmount <= 10000000 &&
+             data.status in ['PAID', 'UNPAID', 'PARTIAL'] &&
+             (!('paymentDate' in data) || (data.paymentDate is string && data.paymentDate.size() <= 20)) &&
+             (!('paymentNote' in data) || (data.paymentNote is string && data.paymentNote.size() <= 200)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidPaymentLog(data) {
+      return data.installmentId is string && data.installmentId.size() >= 1 && data.installmentId.size() <= 128 &&
+             data.memberId is string && data.memberId.size() >= 1 && data.memberId.size() <= 128 &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 80 &&
+             isValidMonthKey(data.monthKey) &&
+             data.previousPaidAmount is int && data.previousPaidAmount >= 0 && data.previousPaidAmount <= 10000000 &&
+             data.newPaidAmount is int && data.newPaidAmount >= 0 && data.newPaidAmount <= 10000000 &&
+             data.previousStatus in ['PAID', 'UNPAID', 'PARTIAL'] &&
+             data.newStatus in ['PAID', 'UNPAID', 'PARTIAL'] &&
+             (!('actionNote' in data) || (data.actionNote is string && data.actionNote.size() <= 200)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    function isValidReminderLog(data) {
+      return data.memberId is string && data.memberId.size() >= 1 && data.memberId.size() <= 128 &&
+             data.memberName is string && data.memberName.size() >= 1 && data.memberName.size() <= 80 &&
+             data.memberPhone is string && data.memberPhone.size() >= 5 && data.memberPhone.size() <= 25 &&
+             isValidMonthKey(data.monthKey) &&
+             data.channel in ['WHATSAPP_API', 'WHATSAPP_MANUAL', 'SMS_API', 'SMS_MANUAL'] &&
+             data.scheduleStage in ['FIRST_28', 'SECOND_3_4', 'THIRD_5', 'FINAL_7', 'LAST_8', 'CUSTOM'] &&
+             data.messagePreview is string && data.messagePreview.size() >= 1 && data.messagePreview.size() <= 500 &&
+             data.dispatchStatus in ['SENT_API', 'OPENED_APP', 'FAILED'] &&
+             (!('errorDetail' in data) || (data.errorDetail is string && data.errorDetail.size() <= 300)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'email', 'preferredLanguage', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'preferredLanguage', 'activeCommitteeId', 'createdAt', 'updatedAt']) &&
+                       isValidAdminProfile(incoming(), userId);
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidAdminProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'preferredLanguage', 'activeCommitteeId', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /committees/{committeeId} {
+        allow get: if isOwner(userId) && isValidId(committeeId);
+        allow list: if isOwner(userId);
+        allow create: if isOwner(userId) &&
+                         isValidId(committeeId) &&
+                         incoming().keys().hasAll(['name', 'memberCount', 'monthlyInstallment', 'totalMonths', 'collectionDayStart', 'collectionDayEnd', 'payoutDay', 'startMonth', 'endMonth', 'status', 'createdAt', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['name', 'memberCount', 'monthlyInstallment', 'totalMonths', 'collectionDayStart', 'collectionDayEnd', 'payoutDay', 'startMonth', 'endMonth', 'status', 'notes', 'createdAt', 'updatedAt']) &&
+                         isValidCommittee(incoming());
+        allow update: if isOwner(userId) &&
+                         isValidId(committeeId) &&
+                         isValidCommittee(incoming()) &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['name', 'memberCount', 'monthlyInstallment', 'totalMonths', 'collectionDayStart', 'collectionDayEnd', 'payoutDay', 'startMonth', 'endMonth', 'status', 'notes', 'updatedAt']);
+        allow delete: if isOwner(userId) && isValidId(committeeId);
+
+        match /members/{memberId} {
+          allow get: if isOwner(userId) && isValidId(committeeId) && isValidId(memberId);
+          allow list: if isOwner(userId) && isValidId(committeeId);
+          allow create: if isOwner(userId) &&
+                           isValidId(committeeId) &&
+                           isValidId(memberId) &&
+                           incoming().keys().hasAll(['name', 'phone', 'committeeNumber', 'payoutMonth', 'payoutStatus', 'payoutAmount', 'status', 'createdAt', 'updatedAt']) &&
+                           incoming().keys().hasOnly(['name', 'phone', 'committeeNumber', 'payoutMonth', 'payoutStatus', 'payoutDate', 'payoutAmount', 'status', 'createdAt', 'updatedAt']) &&
+                           isValidMember(incoming()) &&
+                           committeeExists(userId, committeeId);
+          allow update: if isOwner(userId) &&
+                           isValidId(committeeId) &&
+                           isValidId(memberId) &&
+                           isValidMember(incoming()) &&
+                           incoming().createdAt == existing().createdAt &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'phone', 'committeeNumber', 'payoutMonth', 'payoutStatus', 'payoutDate', 'payoutAmount', 'status', 'updatedAt']);
+          allow delete: if isOwner(userId) && isValidId(committeeId) && isValidId(memberId);
+        }
+
+        match /installments/{installmentId} {
+          allow get: if isOwner(userId) && isValidId(committeeId) && isValidId(installmentId);
+          allow list: if isOwner(userId) && isValidId(committeeId);
+          allow create: if isOwner(userId) &&
+                           isValidId(committeeId) &&
+                           isValidId(installmentId) &&
+                           incoming().keys().hasAll(['memberId', 'memberName', 'memberPhone', 'committeeNumber', 'monthKey', 'monthIndex', 'dueAmount', 'paidAmount', 'status', 'createdAt', 'updatedAt']) &&
+                           incoming().keys().hasOnly(['memberId', 'memberName', 'memberPhone', 'committeeNumber', 'monthKey', 'monthIndex', 'dueAmount', 'paidAmount', 'status', 'paymentDate', 'paymentNote', 'createdAt', 'updatedAt']) &&
+                           isValidInstallment(incoming()) &&
+                           committeeExists(userId, committeeId);
+          allow update: if isOwner(userId) &&
+                           isValidId(committeeId) &&
+                           isValidId(installmentId) &&
+                           isValidInstallment(incoming()) &&
+                           incoming().memberId == existing().memberId &&
+                           incoming().monthKey == existing().monthKey &&
+                           incoming().monthIndex == existing().monthIndex &&
+                           incoming().createdAt == existing().createdAt &&
+                           incoming().diff(existing()).affectedKeys().hasOnly(['memberName', 'memberPhone', 'committeeNumber', 'dueAmount', 'paidAmount', 'status', 'paymentDate', 'paymentNote', 'updatedAt']);
+          allow delete: if isOwner(userId) && isValidId(committeeId) && isValidId(installmentId);
+        }
+
+        match /paymentLogs/{logId} {
+          allow get: if isOwner(userId) && isValidId(committeeId) && isValidId(logId);
+          allow list: if isOwner(userId) && isValidId(committeeId);
+          allow create: if isOwner(userId) &&
+                           isValidId(committeeId) &&
+                           isValidId(logId) &&
+                           incoming().keys().hasAll(['installmentId', 'memberId', 'memberName', 'monthKey', 'previousPaidAmount', 'newPaidAmount', 'previousStatus', 'newStatus', 'createdAt']) &&
+                           incoming().keys().hasOnly(['installmentId', 'memberId', 'memberName', 'monthKey', 'previousPaidAmount', 'newPaidAmount', 'previousStatus', 'newStatus', 'actionNote', 'createdAt']) &&
+                           isValidPaymentLog(incoming()) &&
+                           committeeExists(userId, committeeId);
+          allow update: if false;
+          allow delete: if isOwner(userId) && isValidId(committeeId) && isValidId(logId);
+        }
+
+        match /reminderLogs/{logId} {
+          allow get: if isOwner(userId) && isValidId(committeeId) && isValidId(logId);
+          allow list: if isOwner(userId) && isValidId(committeeId);
+          allow create: if isOwner(userId) &&
+                           isValidId(committeeId) &&
+                           isValidId(logId) &&
+                           incoming().keys().hasAll(['memberId', 'memberName', 'memberPhone', 'monthKey', 'channel', 'scheduleStage', 'messagePreview', 'dispatchStatus', 'createdAt']) &&
+                           incoming().keys().hasOnly(['memberId', 'memberName', 'memberPhone', 'monthKey', 'channel', 'scheduleStage', 'messagePreview', 'dispatchStatus', 'errorDetail', 'createdAt']) &&
+                           isValidReminderLog(incoming()) &&
+                           committeeExists(userId, committeeId);
+          allow update: if false;
+          allow delete: if isOwner(userId) && isValidId(committeeId) && isValidId(logId);
+        }
+      }
+    }
+  }
+}

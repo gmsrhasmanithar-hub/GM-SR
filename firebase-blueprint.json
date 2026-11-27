@@ -1,0 +1,405 @@
+{
+  "entities": {
+    "AdminProfile": {
+      "title": "AdminProfile",
+      "description": "Authenticated committee administrator profile and language preferences",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the administrator"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Administrator display name"
+        },
+        "email": {
+          "type": "string",
+          "description": "Administrator email address"
+        },
+        "preferredLanguage": {
+          "type": "string",
+          "enum": ["en", "ur"],
+          "description": "Selected UI language (en or ur)"
+        },
+        "activeCommitteeId": {
+          "type": "string",
+          "description": "Currently selected committee ID"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": ["userId", "displayName", "email", "preferredLanguage", "createdAt", "updatedAt"]
+    },
+    "Committee": {
+      "title": "Committee",
+      "description": "Personal savings committee (Kameti) configuration and lifecycle status",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Committee display title"
+        },
+        "memberCount": {
+          "type": "integer",
+          "description": "Dynamic target number of members"
+        },
+        "monthlyInstallment": {
+          "type": "integer",
+          "description": "Monthly contribution per member in PKR"
+        },
+        "totalMonths": {
+          "type": "integer",
+          "description": "Total duration in months"
+        },
+        "collectionDayStart": {
+          "type": "integer",
+          "description": "Monthly collection window start day (e.g. 28)"
+        },
+        "collectionDayEnd": {
+          "type": "integer",
+          "description": "Monthly collection window end day in next month (e.g. 8)"
+        },
+        "payoutDay": {
+          "type": "integer",
+          "description": "Monthly payout day (e.g. 10)"
+        },
+        "startMonth": {
+          "type": "string",
+          "description": "Start month in YYYY-MM format"
+        },
+        "endMonth": {
+          "type": "string",
+          "description": "End month in YYYY-MM format"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "COMPLETED", "ARCHIVED"],
+          "description": "Committee lifecycle status"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Optional committee notes"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "name",
+        "memberCount",
+        "monthlyInstallment",
+        "totalMonths",
+        "collectionDayStart",
+        "collectionDayEnd",
+        "payoutDay",
+        "startMonth",
+        "endMonth",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CommitteeMember": {
+      "title": "CommitteeMember",
+      "description": "Member enrolled in a committee with assigned payout turn and status",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Member full name"
+        },
+        "phone": {
+          "type": "string",
+          "description": "Member mobile number"
+        },
+        "committeeNumber": {
+          "type": "integer",
+          "description": "Assigned committee payout turn number"
+        },
+        "payoutMonth": {
+          "type": "string",
+          "description": "Scheduled payout month in YYYY-MM format"
+        },
+        "payoutStatus": {
+          "type": "string",
+          "enum": ["PENDING", "PAID"],
+          "description": "Whether the member's payout has been disbursed"
+        },
+        "payoutDate": {
+          "type": "string",
+          "description": "Actual payout date in YYYY-MM-DD format"
+        },
+        "payoutAmount": {
+          "type": "integer",
+          "description": "Payout amount in PKR"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ACTIVE", "ARCHIVED"],
+          "description": "Member roster status (soft-archived to preserve history)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "name",
+        "phone",
+        "committeeNumber",
+        "payoutMonth",
+        "payoutStatus",
+        "payoutAmount",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "InstallmentRecord": {
+      "title": "InstallmentRecord",
+      "description": "Monthly installment contribution record for a committee member",
+      "type": "object",
+      "properties": {
+        "memberId": {
+          "type": "string",
+          "description": "Referenced CommitteeMember document ID"
+        },
+        "memberName": {
+          "type": "string",
+          "description": "Snapshot of member name for historical integrity"
+        },
+        "memberPhone": {
+          "type": "string",
+          "description": "Snapshot of member phone number"
+        },
+        "committeeNumber": {
+          "type": "integer",
+          "description": "Snapshot of member committee number"
+        },
+        "monthKey": {
+          "type": "string",
+          "description": "Installment month in YYYY-MM format"
+        },
+        "monthIndex": {
+          "type": "integer",
+          "description": "1-based month number within committee cycle"
+        },
+        "dueAmount": {
+          "type": "integer",
+          "description": "Expected installment amount in PKR"
+        },
+        "paidAmount": {
+          "type": "integer",
+          "description": "Amount received in PKR"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["PAID", "UNPAID", "PARTIAL"],
+          "description": "Installment payment status"
+        },
+        "paymentDate": {
+          "type": "string",
+          "description": "Recorded payment date in YYYY-MM-DD format"
+        },
+        "paymentNote": {
+          "type": "string",
+          "description": "Optional payment note"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp"
+        }
+      },
+      "required": [
+        "memberId",
+        "memberName",
+        "memberPhone",
+        "committeeNumber",
+        "monthKey",
+        "monthIndex",
+        "dueAmount",
+        "paidAmount",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PaymentHistoryLog": {
+      "title": "PaymentHistoryLog",
+      "description": "Immutable audit log entry for installment payment edits",
+      "type": "object",
+      "properties": {
+        "installmentId": {
+          "type": "string",
+          "description": "Referenced InstallmentRecord ID"
+        },
+        "memberId": {
+          "type": "string",
+          "description": "Referenced CommitteeMember ID"
+        },
+        "memberName": {
+          "type": "string",
+          "description": "Member name at time of edit"
+        },
+        "monthKey": {
+          "type": "string",
+          "description": "Installment month in YYYY-MM format"
+        },
+        "previousPaidAmount": {
+          "type": "integer",
+          "description": "Paid amount before edit"
+        },
+        "newPaidAmount": {
+          "type": "integer",
+          "description": "Paid amount after edit"
+        },
+        "previousStatus": {
+          "type": "string",
+          "enum": ["PAID", "UNPAID", "PARTIAL"],
+          "description": "Status before edit"
+        },
+        "newStatus": {
+          "type": "string",
+          "enum": ["PAID", "UNPAID", "PARTIAL"],
+          "description": "Status after edit"
+        },
+        "actionNote": {
+          "type": "string",
+          "description": "Optional audit note"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server log timestamp"
+        }
+      },
+      "required": [
+        "installmentId",
+        "memberId",
+        "memberName",
+        "monthKey",
+        "previousPaidAmount",
+        "newPaidAmount",
+        "previousStatus",
+        "newStatus",
+        "createdAt"
+      ]
+    },
+    "ReminderLog": {
+      "title": "ReminderLog",
+      "description": "Dispatch audit log for WhatsApp and SMS reminders",
+      "type": "object",
+      "properties": {
+        "memberId": {
+          "type": "string",
+          "description": "Target member ID"
+        },
+        "memberName": {
+          "type": "string",
+          "description": "Target member name"
+        },
+        "memberPhone": {
+          "type": "string",
+          "description": "Target mobile number"
+        },
+        "monthKey": {
+          "type": "string",
+          "description": "Installment month in YYYY-MM format"
+        },
+        "channel": {
+          "type": "string",
+          "enum": ["WHATSAPP_API", "WHATSAPP_MANUAL", "SMS_API", "SMS_MANUAL"],
+          "description": "Delivery channel used"
+        },
+        "scheduleStage": {
+          "type": "string",
+          "enum": ["FIRST_28", "SECOND_3_4", "THIRD_5", "FINAL_7", "LAST_8", "CUSTOM"],
+          "description": "Reminder stage"
+        },
+        "messagePreview": {
+          "type": "string",
+          "description": "Message body sent or opened"
+        },
+        "dispatchStatus": {
+          "type": "string",
+          "enum": ["SENT_API", "OPENED_APP", "FAILED"],
+          "description": "Outcome of reminder dispatch"
+        },
+        "errorDetail": {
+          "type": "string",
+          "description": "Error detail when dispatch fails"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server dispatch timestamp"
+        }
+      },
+      "required": [
+        "memberId",
+        "memberName",
+        "memberPhone",
+        "monthKey",
+        "channel",
+        "scheduleStage",
+        "messagePreview",
+        "dispatchStatus",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/AdminProfile" },
+      "description": "Administrator profile and preferences"
+    },
+    "/users/{userId}/committees/{committeeId}": {
+      "schema": { "$ref": "#/entities/Committee" },
+      "description": "Committees owned and managed by the administrator"
+    },
+    "/users/{userId}/committees/{committeeId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/CommitteeMember" },
+      "description": "Members and payout order for a committee"
+    },
+    "/users/{userId}/committees/{committeeId}/installments/{installmentId}": {
+      "schema": { "$ref": "#/entities/InstallmentRecord" },
+      "description": "Monthly installment payment records for a committee"
+    },
+    "/users/{userId}/committees/{committeeId}/paymentLogs/{logId}": {
+      "schema": { "$ref": "#/entities/PaymentHistoryLog" },
+      "description": "Immutable payment edit history logs"
+    },
+    "/users/{userId}/committees/{committeeId}/reminderLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ReminderLog" },
+      "description": "WhatsApp and SMS reminder dispatch logs"
+    }
+  }
+}
