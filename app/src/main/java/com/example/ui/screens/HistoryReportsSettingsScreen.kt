@@ -109,10 +109,11 @@ fun HistoryReportsSettingsScreen(
                         Text(strings.noCommitteeTitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         val reports = listOf(
+                            PdfReportType.COLLECTION_REPORT to strings.reportCollection,
                             PdfReportType.MEMBER_LIST to strings.reportMemberList,
                             PdfReportType.MONTHLY_PAYMENT to strings.reportMonthlyPayment,
-                            PdfReportType.PAID_UNPAID_LIST to strings.reportPaidUnpaid,
-                            PdfReportType.COLLECTION_REPORT to strings.reportCollection,
+                            PdfReportType.PAID_MEMBERS_REPORT to strings.reportPaidMembers,
+                            PdfReportType.UNPAID_MEMBERS_REPORT to strings.reportUnpaidMembers,
                             PdfReportType.PAYOUT_REPORT to strings.reportPayout,
                             PdfReportType.COMPLETE_SUMMARY to strings.reportCompleteSummary
                         )

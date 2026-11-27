@@ -20,12 +20,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Save
-import androidx.compose.material.icons.rounded.Send
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material3.AlertDialog
@@ -66,10 +66,10 @@ import com.example.i18n.AppLanguage
 import com.example.i18n.UiStrings
 import com.example.model.Committee
 import com.example.model.CommitteeMember
+import com.example.model.CommitteeUtils
 import com.example.model.DispatchStatus
 import com.example.model.FormatUtils
 import com.example.model.InstallmentRecord
-import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
@@ -126,30 +126,16 @@ fun RemindersScreen(
             ?: if (language == AppLanguage.UR) selectedStage.defaultTemplateUr else selectedStage.defaultTemplateEn
     }
 
-    val activeMembers = remember(members) {
-        members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }.sortedBy { it.committeeNumber }
-    }
-    val monthInstallmentByMember = remember(installments, selectedMonthKey) {
-        installments.filter { it.monthKey == selectedMonthKey }.associateBy { it.memberId }
+    val monthInstallments = remember(installments, selectedMonthKey) {
+        installments.filter { it.monthKey == selectedMonthKey }
     }
 
     // CRITICAL BUSINESS RULE: Automatically exclude PAID members from all reminders for this month
-    val paidExcludedMembers = remember(activeMembers, monthInstallmentByMember) {
-        activeMembers.filter { m ->
-            monthInstallmentByMember[m.id]?.statusEnum == InstallmentStatus.PAID
-        }
+    val eligibility = remember(members, monthInstallments, committee.monthlyInstallment) {
+        CommitteeUtils.filterUnpaidForReminders(members, monthInstallments, committee.monthlyInstallment)
     }
-    val eligibleRecipients = remember(activeMembers, monthInstallmentByMember, committee.monthlyInstallment) {
-        activeMembers.mapNotNull { m ->
-            val rec = monthInstallmentByMember[m.id]
-            if (rec?.statusEnum == InstallmentStatus.PAID) {
-                null
-            } else {
-                val due = rec?.remainingAmount?.takeIf { it > 0L } ?: committee.monthlyInstallment
-                m to due
-            }
-        }
-    }
+    val paidExcludedMembers = eligibility.excludedPaidMembers
+    val eligibleRecipients = eligibility.eligibleUnpaidOrPartial
 
     val selectedIds = remember { mutableStateListOf<String>() }
     LaunchedEffect(eligibleRecipients) {
@@ -260,7 +246,7 @@ fun RemindersScreen(
                             FilterChip(
                                 selected = useWhatsApp,
                                 onClick = { useWhatsApp = true },
-                                leadingIcon = { Icon(Icons.Rounded.Chat, contentDescription = null, modifier = Modifier.size(16.dp)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = null, modifier = Modifier.size(16.dp)) },
                                 label = { Text(strings.channelWhatsApp, fontWeight = FontWeight.Bold) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = WhatsAppGreen,
@@ -457,7 +443,7 @@ fun RemindersScreen(
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.testTag("send_selected_reminders_btn")
                     ) {
-                        Icon(Icons.Rounded.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("${strings.sendSelected} (${selectedIds.size})")
                     }
@@ -534,7 +520,7 @@ fun RemindersScreen(
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
                         ) {
-                            Icon(Icons.Rounded.Chat, contentDescription = strings.openWhatsApp, tint = WhatsAppGreen, modifier = Modifier.size(16.dp))
+                            Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = strings.openWhatsApp, tint = WhatsAppGreen, modifier = Modifier.size(16.dp))
                         }
                         OutlinedButton(
                             onClick = {

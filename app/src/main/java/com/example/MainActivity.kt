@@ -71,19 +71,24 @@ import com.example.data.MessagingConfigStore
 import com.example.data.MessagingGateway
 import com.example.i18n.AppLanguage
 import com.example.i18n.stringsFor
+import com.example.model.BackupPreview
+import com.example.model.BackupUtils
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
+import com.example.model.PayoutStatus
 import com.example.model.ReminderStage
 import com.example.ui.components.CommitteeEditorDialog
 import com.example.ui.components.CommitteeSwitcherDialog
 import com.example.ui.components.MemberDetailDialog
 import com.example.ui.components.MemberEditorDialog
 import com.example.ui.components.MessagingGatewayConfigDialog
+import com.example.ui.components.PaymentActivityHistoryDialog
 import com.example.ui.components.RecordPaymentDialog
+import com.example.ui.components.RecordPayoutDialog
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.HistoryReportsSettingsScreen
 import com.example.ui.screens.InstallmentsScreen
@@ -220,6 +225,9 @@ fun MainFeatureShell(
     var memberToDetail by remember { mutableStateOf<CommitteeMember?>(null) }
     var installmentToEdit by remember { mutableStateOf<InstallmentRecord?>(null) }
     var showGatewayConfig by remember { mutableStateOf(false) }
+    var payoutTargetMember by remember { mutableStateOf<CommitteeMember?>(null) }
+    var showActivityHistory by remember { mutableStateOf(false) }
+    var pendingRestoreData by remember { mutableStateOf<Pair<String, BackupPreview>?>(null) }
 
     // SAF Backup Export / Restore launchers
     var pendingBackupJson by remember { mutableStateOf<String?>(null) }
@@ -246,7 +254,12 @@ fun MainFeatureShell(
             try {
                 val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                 if (!json.isNullOrBlank()) {
-                    viewModel.restoreBackupJson(json)
+                    val previewRes = BackupUtils.parsePreview(json)
+                    previewRes.onSuccess { preview ->
+                        pendingRestoreData = json to preview
+                    }.onFailure {
+                        scope.launch { snackbarHostState.showSnackbar("Invalid GM HASMANI backup JSON file.") }
+                    }
                 }
             } catch (e: Exception) {
                 scope.launch { snackbarHostState.showSnackbar("Could not read backup file.") }
@@ -394,7 +407,8 @@ fun MainFeatureShell(
                                         onArchiveMember = viewModel::archiveMember,
                                         onViewMemberDetail = { memberToDetail = it },
                                         onSwapOrder = viewModel::swapPayoutOrder,
-                                        onSetPayoutStatus = { m, st -> viewModel.setPayoutStatus(m, st) }
+                                        onRequestMarkPayoutPaid = { payoutTargetMember = it },
+                                        onRevertPayoutPending = { m -> viewModel.setPayoutStatus(m, PayoutStatus.PENDING) }
                                     )
 
                                     MainTab.INSTALLMENTS -> InstallmentsScreen(
@@ -435,6 +449,7 @@ fun MainFeatureShell(
                                                 viewModel.launchManualDispatch(context, m, amt, false, ReminderStage.FIRST_28, tpl)
                                             }
                                         },
+                                        onOpenActivityHistory = { showActivityHistory = true },
                                         onCreateCommittee = { showCreateCommittee = true }
                                     )
 
@@ -553,6 +568,7 @@ fun MainFeatureShell(
             strings = strings,
             existingMember = null,
             suggestedCommitteeNumber = nextSuggestedNumber,
+            existingMembers = members,
             onDismiss = { showAddMember = false },
             onSave = { name, phone, number ->
                 viewModel.addMember(name, phone, number)
@@ -566,6 +582,7 @@ fun MainFeatureShell(
             strings = strings,
             existingMember = m,
             suggestedCommitteeNumber = m.committeeNumber,
+            existingMembers = members,
             onDismiss = { memberToEdit = null },
             onSave = { name, phone, number ->
                 viewModel.updateMember(m, name, phone, number)
@@ -604,6 +621,64 @@ fun MainFeatureShell(
             onSave = { paidAmount, status, paymentDate, note ->
                 viewModel.recordPayment(rec, paidAmount, status, paymentDate, note)
                 installmentToEdit = null
+            }
+        )
+    }
+
+    payoutTargetMember?.let { member ->
+        activeCommittee?.let { committee ->
+            RecordPayoutDialog(
+                strings = strings,
+                committee = committee,
+                member = member,
+                onDismiss = { payoutTargetMember = null },
+                onConfirm = { amount, date ->
+                    viewModel.setPayoutStatus(member, PayoutStatus.PAID, date = date, payoutAmount = amount)
+                    payoutTargetMember = null
+                }
+            )
+        }
+    }
+
+    if (showActivityHistory) {
+        PaymentActivityHistoryDialog(
+            strings = strings,
+            logs = paymentLogs,
+            onDismiss = { showActivityHistory = false }
+        )
+    }
+
+    pendingRestoreData?.let { (json, preview) ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingRestoreData = null },
+            title = { Text(strings.confirmRestoreTitle, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(strings.confirmRestoreBody)
+                    Text(
+                        text = "• Committees: ${preview.committeeCount}\n• Members: ${preview.memberCount}\n• Installments: ${preview.installmentCount}" +
+                            if (preview.exportedAt.isNotBlank()) "\n• Exported: ${preview.exportedAt}" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.Button(
+                    onClick = {
+                        viewModel.restoreBackupJson(json)
+                        pendingRestoreData = null
+                    },
+                    modifier = Modifier.testTag("confirm_restore_btn")
+                ) {
+                    Text(strings.confirm)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { pendingRestoreData = null }) {
+                    Text(strings.cancel)
+                }
             }
         )
     }

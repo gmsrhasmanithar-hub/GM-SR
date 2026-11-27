@@ -18,9 +18,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Sync
@@ -78,6 +79,7 @@ fun InstallmentsScreen(
     onEditPayment: (InstallmentRecord) -> Unit,
     onQuickWhatsApp: (CommitteeMember, Long) -> Unit,
     onQuickSms: (CommitteeMember, Long) -> Unit,
+    onOpenActivityHistory: () -> Unit,
     onCreateCommittee: () -> Unit
 ) {
     if (committee == null) {
@@ -175,14 +177,28 @@ fun InstallmentsScreen(
                         )
                     }
 
-                    OutlinedButton(
-                        onClick = onSyncMonth,
-                        modifier = Modifier.fillMaxWidth().testTag("sync_installments_button"),
-                        shape = RoundedCornerShape(12.dp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Rounded.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(strings.generateInstallments)
+                        OutlinedButton(
+                            onClick = onSyncMonth,
+                            modifier = Modifier.weight(1f).testTag("sync_installments_button"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Rounded.Sync, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(strings.generateInstallments, maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onOpenActivityHistory,
+                            modifier = Modifier.testTag("activity_history_button"),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Rounded.History, contentDescription = strings.activityHistoryTitle, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(strings.paymentHistory.take(16), maxLines = 1)
+                        }
                     }
                 }
             }
@@ -340,7 +356,7 @@ fun InstallmentsScreen(
                                 IconButton(
                                     onClick = { onQuickWhatsApp(member, rec.remainingAmount.coerceAtLeast(rec.dueAmount)) }
                                 ) {
-                                    Icon(Icons.Rounded.Chat, contentDescription = strings.openWhatsApp, tint = WhatsAppGreen)
+                                    Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = strings.openWhatsApp, tint = WhatsAppGreen)
                                 }
                                 IconButton(
                                     onClick = { onQuickSms(member, rec.remainingAmount.coerceAtLeast(rec.dueAmount)) }

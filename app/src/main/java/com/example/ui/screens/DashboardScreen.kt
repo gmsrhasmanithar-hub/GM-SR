@@ -313,6 +313,28 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     KpiMetricCard(
+                        title = strings.totalActiveCommittees,
+                        value = "${summary.totalActiveCommittees}",
+                        subtitle = committee.name,
+                        icon = Icons.Rounded.AccountBalanceWallet,
+                        accentColor = EmeraldPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    KpiMetricCard(
+                        title = strings.activeMembers,
+                        value = "${summary.activeMemberCount} / ${summary.targetMemberCount}",
+                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} • ${strings.partialPaymentsLabel}: ${summary.partialMembersCount}",
+                        icon = Icons.Rounded.Group,
+                        accentColor = EmeraldPrimary,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    KpiMetricCard(
                         title = strings.totalCollected,
                         value = FormatUtils.formatPkr(summary.currentMonthCollected),
                         subtitle = "All: ${FormatUtils.formatPkr(summary.totalCommitteeCollectedAllMonths)}",
@@ -323,7 +345,7 @@ fun DashboardScreen(
                     KpiMetricCard(
                         title = strings.totalPending,
                         value = FormatUtils.formatPkr(summary.currentMonthPending),
-                        subtitle = "${strings.unpaidMembers}: ${summary.unpaidMembersCount + summary.partialMembersCount}",
+                        subtitle = "${strings.unpaidMembers}: ${summary.unpaidMembersCount} • ${strings.partialLabel}: ${summary.partialMembersCount}",
                         icon = Icons.Rounded.PendingActions,
                         accentColor = if (summary.currentMonthPending == 0L) StatusPaidGreen else StatusUnpaidRed,
                         modifier = Modifier.weight(1f)
@@ -335,11 +357,11 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     KpiMetricCard(
-                        title = strings.activeMembers,
-                        value = "${summary.activeMemberCount} / ${summary.targetMemberCount}",
-                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount}",
-                        icon = Icons.Rounded.Group,
-                        accentColor = EmeraldPrimary,
+                        title = strings.partialPaymentsLabel,
+                        value = "${summary.partialMembersCount}",
+                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} / ${summary.activeMemberCount}",
+                        icon = Icons.Rounded.Payments,
+                        accentColor = StatusPendingYellow,
                         modifier = Modifier.weight(1f)
                     )
                     KpiMetricCard(

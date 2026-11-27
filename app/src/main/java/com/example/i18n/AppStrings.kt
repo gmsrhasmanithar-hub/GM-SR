@@ -135,7 +135,16 @@ data class UiStrings(
     val manualQueueTitle: String,
     val markSentAndNext: String,
     val skipMember: String,
-    val collectionWindowLabel: String
+    val collectionWindowLabel: String,
+    val totalActiveCommittees: String,
+    val partialPaymentsLabel: String,
+    val activityHistoryTitle: String,
+    val confirmRestoreTitle: String,
+    val confirmRestoreBody: String,
+    val recordPayoutTitle: String,
+    val payoutAmountLabel: String,
+    val reportPaidMembers: String,
+    val reportUnpaidMembers: String
 )
 
 fun stringsFor(language: AppLanguage): UiStrings = when (language) {
@@ -269,7 +278,16 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         manualQueueTitle = "Manual Send Queue",
         markSentAndNext = "Open App & Next",
         skipMember = "Skip",
-        collectionWindowLabel = "Collection Window"
+        collectionWindowLabel = "Collection Window",
+        totalActiveCommittees = "Active Committees",
+        partialPaymentsLabel = "Partial Payments",
+        activityHistoryTitle = "Payment Activity History",
+        confirmRestoreTitle = "Confirm Database Restore",
+        confirmRestoreBody = "Restoring will overwrite matching committee, member, and installment records in Firestore. Continue?",
+        recordPayoutTitle = "Record Committee Payout",
+        payoutAmountLabel = "Payout Amount (PKR)",
+        reportPaidMembers = "Paid Members Report",
+        reportUnpaidMembers = "Unpaid Members Report"
     )
 
     AppLanguage.UR -> UiStrings(
@@ -402,6 +420,15 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         manualQueueTitle = "مینوئل پیغام بھیجنے کی قطار",
         markSentAndNext = "ایپ کھولیں اور آگے بڑھیں",
         skipMember = "چھوڑیں",
-        collectionWindowLabel = "وصولی کا وقت"
+        collectionWindowLabel = "وصولی کا وقت",
+        totalActiveCommittees = "فعال کمیٹیاں",
+        partialPaymentsLabel = "جزوی ادائیگیاں",
+        activityHistoryTitle = "ادائیگی کی مکمل ہسٹری",
+        confirmRestoreTitle = "ڈیٹا بیس بحال کرنے کی تصدیق",
+        confirmRestoreBody = "بیک اپ بحال کرنے سے موجودہ ملتے جلتے ریکارڈز تبدیل ہو جائیں گے۔ کیا آپ جاری رکھنا چاہتے ہیں؟",
+        recordPayoutTitle = "کمیٹی پے آؤٹ درج کریں",
+        payoutAmountLabel = "پے آؤٹ رقم (روپے)",
+        reportPaidMembers = "ادا شدہ ممبرز رپورٹ",
+        reportUnpaidMembers = "بقایا ممبرز رپورٹ"
     )
 }

@@ -493,20 +493,25 @@ class CommitteeRepository(
         committee: Committee,
         member: CommitteeMember,
         payoutStatus: PayoutStatus,
-        payoutDate: String?
+        payoutDate: String?,
+        payoutAmount: Long? = null
     ): Result<Unit> {
         var path = "users/unknown/committees/${committee.id}/members/${member.id}"
         return try {
             val uid = requireUserId()
             val docRef = membersCol(uid, committee.id).document(member.id)
             path = docRef.path
+            val effectiveAmount = (payoutAmount ?: member.payoutAmount)
+                .takeIf { it > 0L } ?: committee.eachPayoutAmount
             val payload = mutableMapOf<String, Any>(
                 "payoutStatus" to payoutStatus.name,
-                "payoutAmount" to (if (member.payoutAmount > 0L) member.payoutAmount else committee.eachPayoutAmount),
+                "payoutAmount" to effectiveAmount.coerceIn(0L, 500_000_000L),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             if (payoutStatus == PayoutStatus.PAID) {
                 payload["payoutDate"] = (payoutDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString()).take(20)
+            } else {
+                payload["payoutDate"] = FieldValue.delete()
             }
             docRef.update(payload).await()
             Result.success(Unit)

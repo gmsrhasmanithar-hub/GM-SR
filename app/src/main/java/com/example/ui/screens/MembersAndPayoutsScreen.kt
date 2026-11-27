@@ -77,7 +77,8 @@ fun MembersAndPayoutsScreen(
     onArchiveMember: (CommitteeMember) -> Unit,
     onViewMemberDetail: (CommitteeMember) -> Unit,
     onSwapOrder: (CommitteeMember, CommitteeMember) -> Unit,
-    onSetPayoutStatus: (CommitteeMember, PayoutStatus) -> Unit
+    onRequestMarkPayoutPaid: (CommitteeMember) -> Unit,
+    onRevertPayoutPending: (CommitteeMember) -> Unit
 ) {
     if (committee == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -380,7 +381,7 @@ fun MembersAndPayoutsScreen(
 
                                 if (member.payoutStatusEnum == PayoutStatus.PENDING) {
                                     Button(
-                                        onClick = { onSetPayoutStatus(member, PayoutStatus.PAID) },
+                                        onClick = { onRequestMarkPayoutPaid(member) },
                                         colors = ButtonDefaults.buttonColors(containerColor = StatusPaidGreen),
                                         shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier.testTag("mark_payout_paid_${member.id}")
@@ -391,7 +392,7 @@ fun MembersAndPayoutsScreen(
                                     }
                                 } else {
                                     OutlinedButton(
-                                        onClick = { onSetPayoutStatus(member, PayoutStatus.PENDING) },
+                                        onClick = { onRevertPayoutPending(member) },
                                         shape = RoundedCornerShape(12.dp)
                                     ) {
                                         Text(strings.markPayoutPending, color = StatusPendingYellow)

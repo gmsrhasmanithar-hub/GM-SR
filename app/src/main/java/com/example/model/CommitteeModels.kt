@@ -44,6 +44,12 @@ enum class InstallmentStatus {
     companion object {
         fun fromRaw(raw: String?): InstallmentStatus =
             entries.firstOrNull { it.name == raw } ?: UNPAID
+
+        fun computeStatus(paidAmount: Long, dueAmount: Long): InstallmentStatus = when {
+            paidAmount <= 0L -> UNPAID
+            paidAmount >= dueAmount -> PAID
+            else -> PARTIAL
+        }
     }
 }
 
@@ -306,6 +312,7 @@ data class MonthlyChartPoint(
 )
 
 data class DashboardSummary(
+    val totalActiveCommittees: Int = 1,
     val activeMemberCount: Int,
     val targetMemberCount: Int,
     val monthlyCollectionTarget: Long,
@@ -404,3 +411,99 @@ object FormatUtils {
     fun formatPkr(amount: Long): String = "PKR ${numberFormat.format(amount)}"
     fun formatCompactNumber(amount: Long): String = numberFormat.format(amount)
 }
+
+enum class DuplicateConflictType {
+    PHONE, COMMITTEE_NUMBER
+}
+
+data class DuplicateConflict(
+    val type: DuplicateConflictType,
+    val existingMember: CommitteeMember
+)
+
+data class ReminderEligibility(
+    val excludedPaidMembers: List<CommitteeMember>,
+    val eligibleUnpaidOrPartial: List<Pair<CommitteeMember, Long>>
+)
+
+object CommitteeUtils {
+    fun filterUnpaidForReminders(
+        members: List<CommitteeMember>,
+        monthInstallments: List<InstallmentRecord>,
+        fallbackMonthlyInstallment: Long
+    ): ReminderEligibility {
+        val activeSorted = members
+            .filter { it.memberStatusEnum == MemberStatus.ACTIVE }
+            .sortedBy { it.committeeNumber }
+        val byMember = monthInstallments.associateBy { it.memberId }
+        val excluded = mutableListOf<CommitteeMember>()
+        val eligible = mutableListOf<Pair<CommitteeMember, Long>>()
+        for (member in activeSorted) {
+            val rec = byMember[member.id]
+            if (rec?.statusEnum == InstallmentStatus.PAID) {
+                excluded.add(member)
+            } else {
+                val due = rec?.remainingAmount?.takeIf { it > 0L } ?: fallbackMonthlyInstallment
+                eligible.add(member to due)
+            }
+        }
+        return ReminderEligibility(excludedPaidMembers = excluded, eligibleUnpaidOrPartial = eligible)
+    }
+
+    fun findDuplicateMember(
+        members: List<CommitteeMember>,
+        phone: String,
+        committeeNumber: Long,
+        excludeMemberId: String? = null
+    ): DuplicateConflict? {
+        val normalizedPhone = PhoneUtils.toWhatsAppDigits(phone)
+        val active = members.filter {
+            it.memberStatusEnum == MemberStatus.ACTIVE && it.id != excludeMemberId
+        }
+        val phoneMatch = active.firstOrNull {
+            normalizedPhone.isNotEmpty() && PhoneUtils.toWhatsAppDigits(it.phone) == normalizedPhone
+        }
+        if (phoneMatch != null) {
+            return DuplicateConflict(DuplicateConflictType.PHONE, phoneMatch)
+        }
+        val numMatch = active.firstOrNull { it.committeeNumber == committeeNumber }
+        if (numMatch != null) {
+            return DuplicateConflict(DuplicateConflictType.COMMITTEE_NUMBER, numMatch)
+        }
+        return null
+    }
+}
+
+data class BackupPreview(
+    val committeeCount: Int,
+    val memberCount: Int,
+    val installmentCount: Int,
+    val exportedAt: String
+)
+
+object BackupUtils {
+    fun parsePreview(json: String): Result<BackupPreview> {
+        return try {
+            val root = org.json.JSONObject(json)
+            val committees = root.getJSONArray("committees")
+            var members = 0
+            var installments = 0
+            for (i in 0 until committees.length()) {
+                val c = committees.getJSONObject(i)
+                members += c.optJSONArray("members")?.length() ?: 0
+                installments += c.optJSONArray("installments")?.length() ?: 0
+            }
+            Result.success(
+                BackupPreview(
+                    committeeCount = committees.length(),
+                    memberCount = members,
+                    installmentCount = installments,
+                    exportedAt = root.optString("exportedAt", "")
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+}
+

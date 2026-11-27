@@ -51,6 +51,8 @@ import com.example.data.MessagingGatewayConfig
 import com.example.i18n.UiStrings
 import com.example.model.Committee
 import com.example.model.CommitteeMember
+import com.example.model.CommitteeUtils
+import com.example.model.DuplicateConflictType
 import com.example.model.FormatUtils
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
@@ -340,6 +342,7 @@ fun MemberEditorDialog(
     strings: UiStrings,
     existingMember: CommitteeMember?,
     suggestedCommitteeNumber: Long,
+    existingMembers: List<CommitteeMember> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (name: String, phone: String, committeeNumber: Long) -> Unit
 ) {
@@ -379,7 +382,7 @@ fun MemberEditorDialog(
                 )
                 OutlinedTextField(
                     value = numberText,
-                    onValueChange = { numberText = it.filter { c -> c.isDigit() } },
+                    onValueChange = { numberText = it.filter { c -> c.isDigit() }; errorText = null },
                     label = { Text(strings.committeeNumber) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
@@ -398,10 +401,22 @@ fun MemberEditorDialog(
             Button(
                 onClick = {
                     val num = numberText.toLongOrNull()
+                    val conflict = if (num != null && existingMembers.isNotEmpty()) {
+                        CommitteeUtils.findDuplicateMember(
+                            members = existingMembers,
+                            phone = phone,
+                            committeeNumber = num,
+                            excludeMemberId = existingMember?.id
+                        )
+                    } else null
                     when {
                         name.trim().isEmpty() -> errorText = "Member name is required"
                         phone.trim().filter { it.isDigit() }.length < 7 -> errorText = "Enter a valid mobile number"
                         num == null || num !in 1L..500L -> errorText = "Committee number must be >= 1"
+                        conflict?.type == DuplicateConflictType.PHONE ->
+                            errorText = "Mobile number already belongs to #${conflict.existingMember.committeeNumber} ${conflict.existingMember.name}"
+                        conflict?.type == DuplicateConflictType.COMMITTEE_NUMBER ->
+                            errorText = "Committee #$num is already assigned to ${conflict.existingMember.name}"
                         else -> onSave(name.trim(), phone.trim(), num)
                     }
                 },
@@ -859,3 +874,147 @@ fun MessagingGatewayConfigDialog(
         }
     )
 }
+
+@Composable
+fun RecordPayoutDialog(
+    strings: UiStrings,
+    committee: Committee,
+    member: CommitteeMember,
+    onDismiss: () -> Unit,
+    onConfirm: (payoutAmount: Long, payoutDate: String) -> Unit
+) {
+    val defaultAmount = if (member.payoutAmount > 0L) member.payoutAmount else committee.eachPayoutAmount
+    var amountText by remember { mutableStateOf(defaultAmount.toString()) }
+    var dateText by remember { mutableStateOf(member.payoutDate ?: MonthUtils.todayDateString()) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(strings.recordPayoutTitle, fontWeight = FontWeight.Bold)
+                Text(
+                    text = "#${member.committeeNumber} • ${member.name} • ${MonthUtils.formatMonthDisplay(member.payoutMonth)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it.filter { c -> c.isDigit() }; errorMsg = null },
+                    label = { Text(strings.payoutAmountLabel) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("payout_amount_input")
+                )
+                OutlinedTextField(
+                    value = dateText,
+                    onValueChange = { dateText = it; errorMsg = null },
+                    label = { Text("${strings.paymentDate} (YYYY-MM-DD)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("payout_date_input")
+                )
+                if (errorMsg != null) {
+                    Text(
+                        text = errorMsg ?: "",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val amt = amountText.toLongOrNull()
+                    when {
+                        amt == null || amt <= 0L -> errorMsg = "Enter a valid payout amount"
+                        dateText.trim().isEmpty() -> errorMsg = "Enter payout date"
+                        else -> onConfirm(amt, dateText.trim())
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = StatusPaidGreen),
+                modifier = Modifier.testTag("confirm_payout_button")
+            ) {
+                Text(strings.markPayoutPaid)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(strings.cancel) }
+        }
+    )
+}
+
+@Composable
+fun PaymentActivityHistoryDialog(
+    strings: UiStrings,
+    logs: List<PaymentHistoryLog>,
+    onDismiss: () -> Unit
+) {
+    val timeFmt = remember { SimpleDateFormat("dd MMM yyyy • HH:mm", Locale.US) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Rounded.History, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text(strings.activityHistoryTitle, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (logs.isEmpty()) {
+                    Text(
+                        text = strings.noHistoryYet,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    logs.forEach { log ->
+                        val tsText = log.createdAt?.toDate()?.let { timeFmt.format(it) } ?: "Just now"
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Text(
+                                    text = "${log.memberName} • ${MonthUtils.formatMonthDisplay(log.monthKey)}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "${log.previousStatus} (${FormatUtils.formatCompactNumber(log.previousPaidAmount)}) → ${log.newStatus} (${FormatUtils.formatCompactNumber(log.newPaidAmount)})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = tsText + (log.actionNote?.let { " • $it" } ?: ""),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(strings.close) }
+        }
+    )
+}
+

@@ -15,8 +15,10 @@ import com.example.i18n.AppLanguage
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
+import com.example.model.CommitteeUtils
 import com.example.model.DashboardSummary
 import com.example.model.DispatchStatus
+import com.example.model.DuplicateConflictType
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
@@ -155,15 +157,18 @@ class CommitteeViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val dashboardSummary: StateFlow<DashboardSummary?> = combine(
+        committeesState,
         activeCommittee,
         membersState,
         installmentsState,
         _selectedMonthKey
-    ) { committee, mState, iState, selectedMonth ->
+    ) { allCommitteesState, committee, mState, iState, selectedMonth ->
         if (committee == null) return@combine null
+        val allCommittees = (allCommitteesState as? UiState.Success)?.data ?: emptyList()
+        val activeCommitteeCount = allCommittees.count { it.statusEnum == CommitteeStatus.ACTIVE }.coerceAtLeast(1)
         val members = (mState as? UiState.Success)?.data ?: emptyList()
         val installments = (iState as? UiState.Success)?.data ?: emptyList()
-        computeSummary(committee, members, installments, selectedMonth)
+        computeSummary(activeCommitteeCount, committee, members, installments, selectedMonth)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
 
     init {
@@ -194,6 +199,7 @@ class CommitteeViewModel(
     }
 
     private fun computeSummary(
+        totalActiveCommittees: Int,
         committee: Committee,
         members: List<CommitteeMember>,
         installments: List<InstallmentRecord>,
@@ -245,6 +251,7 @@ class CommitteeViewModel(
         val remainingMonths = (committee.totalMonths.toInt() - completedPayouts).coerceAtLeast(0)
 
         return DashboardSummary(
+            totalActiveCommittees = totalActiveCommittees,
             activeMemberCount = activeMembers.size,
             targetMemberCount = committee.memberCount.toInt(),
             monthlyCollectionTarget = monthlyTarget,
@@ -358,6 +365,18 @@ class CommitteeViewModel(
 
     fun addMember(name: String, phone: String, committeeNumber: Long) {
         val committee = activeCommittee.value ?: return
+        val existingMembers = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        val conflict = CommitteeUtils.findDuplicateMember(existingMembers, phone, committeeNumber)
+        if (conflict != null) {
+            val msg = when (conflict.type) {
+                DuplicateConflictType.PHONE ->
+                    "Duplicate mobile number: already assigned to #${conflict.existingMember.committeeNumber} ${conflict.existingMember.name}."
+                DuplicateConflictType.COMMITTEE_NUMBER ->
+                    "Duplicate Committee #$committeeNumber: already assigned to ${conflict.existingMember.name}."
+            }
+            _snackbarEvents.tryEmit(msg)
+            return
+        }
         viewModelScope.launch {
             _isBusy.value = true
             val res = repository.addMember(committee, name, phone, committeeNumber)
@@ -372,6 +391,23 @@ class CommitteeViewModel(
 
     fun updateMember(member: CommitteeMember, newName: String, newPhone: String, newCommitteeNumber: Long) {
         val committee = activeCommittee.value ?: return
+        val existingMembers = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        val conflict = CommitteeUtils.findDuplicateMember(
+            members = existingMembers,
+            phone = newPhone,
+            committeeNumber = newCommitteeNumber,
+            excludeMemberId = member.id
+        )
+        if (conflict != null) {
+            val msg = when (conflict.type) {
+                DuplicateConflictType.PHONE ->
+                    "Duplicate mobile number: already used by #${conflict.existingMember.committeeNumber} ${conflict.existingMember.name}."
+                DuplicateConflictType.COMMITTEE_NUMBER ->
+                    "Duplicate Committee #$newCommitteeNumber: already assigned to ${conflict.existingMember.name}."
+            }
+            _snackbarEvents.tryEmit(msg)
+            return
+        }
         viewModelScope.launch {
             repository.updateMember(committee, member, newName, newPhone, newCommitteeNumber)
                 .onSuccess { _snackbarEvents.tryEmit("Member updated.") }
@@ -396,10 +432,15 @@ class CommitteeViewModel(
         }
     }
 
-    fun setPayoutStatus(member: CommitteeMember, status: PayoutStatus, date: String? = null) {
+    fun setPayoutStatus(
+        member: CommitteeMember,
+        status: PayoutStatus,
+        date: String? = null,
+        payoutAmount: Long? = null
+    ) {
         val committee = activeCommittee.value ?: return
         viewModelScope.launch {
-            repository.updateMemberPayoutStatus(committee, member, status, date)
+            repository.updateMemberPayoutStatus(committee, member, status, date, payoutAmount)
                 .onSuccess { _snackbarEvents.tryEmit("Payout for ${member.name}: ${status.name}") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update payout.") }
         }
