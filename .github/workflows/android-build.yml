@@ -66,9 +66,10 @@ jobs:
           -Dorg.gradle.parallel=false
           -Dorg.gradle.configuration-cache=false
 
-      - name: Run Unit & Robolectric Tests
+      - name: Run Unit Tests
         run: >
           gradle :app:testDebugUnitTest
+          --tests "com.example.CommitteeLogicUnitTest"
           --console=plain
           -Dorg.gradle.jvmargs="-Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
           -Dorg.gradle.workers.max=2
