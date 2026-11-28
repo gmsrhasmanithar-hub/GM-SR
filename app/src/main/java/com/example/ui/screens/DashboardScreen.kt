@@ -19,15 +19,20 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ListAlt
+import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.EmojiEvents
 import androidx.compose.material.icons.rounded.EventAvailable
+import androidx.compose.material.icons.rounded.ForwardToInbox
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.PendingActions
 import androidx.compose.material.icons.rounded.PersonAdd
@@ -35,6 +40,7 @@ import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Visibility
@@ -71,6 +77,7 @@ import com.example.model.CommitteeMember
 import com.example.model.CommitteeTurn
 import com.example.model.DashboardSummary
 import com.example.model.FormatUtils
+import com.example.model.ForwardFinancialSummary
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MonthUtils
@@ -97,6 +104,8 @@ fun DashboardScreen(
     members: List<CommitteeMember>,
     installments: List<InstallmentRecord>,
     turns: List<CommitteeTurn>,
+    forwardSummary: ForwardFinancialSummary? = null,
+    unreadNotificationCount: Int = 0,
     selectedMonthKey: String,
     onSelectMonth: (String) -> Unit,
     onOpenCommitteeSwitcher: () -> Unit,
@@ -105,10 +114,21 @@ fun DashboardScreen(
     onEditCommittee: (Committee) -> Unit,
     onDeleteCommittee: (Committee) -> Unit,
     onQuickAddMember: () -> Unit,
+    onGoToCommittees: () -> Unit,
+    onGoToMembers: () -> Unit,
     onGoToInstallments: () -> Unit,
+    onGoToPendingInstallments: () -> Unit,
+    onGoToForwardPayments: () -> Unit = {},
     onGoToTurns: () -> Unit,
+    onGoToOldHistory: () -> Unit,
     onGoToReminders: () -> Unit,
     onGoToReports: () -> Unit,
+    onGoToSettings: () -> Unit,
+    onOpenPaidDetail: () -> Unit,
+    onOpenUnpaidDetail: () -> Unit,
+    onOpenUpcomingDetail: () -> Unit,
+    onOpenBackupRestore: () -> Unit,
+    onOpenNotifications: () -> Unit,
     onPrintSummary: () -> Unit,
     onDownloadSummary: () -> Unit,
     onOpenAuditHistory: () -> Unit,
@@ -365,7 +385,8 @@ fun DashboardScreen(
                         subtitle = "${strings.completedCommitteesLabel}: ${summary.totalCompletedCommittees}",
                         icon = Icons.Rounded.PieChart,
                         accentColor = EmeraldPrimary,
-                        modifier = Modifier.weight(1f)
+                        onClick = onGoToCommittees,
+                        modifier = Modifier.weight(1f).testTag("kpi_committees")
                     )
                     KpiMetricCard(
                         title = "${strings.activeMembers} & ${strings.totalSharesLabel}",
@@ -373,7 +394,8 @@ fun DashboardScreen(
                         subtitle = "${FormatUtils.formatShares(summary.totalMemberShares)} / ${summary.totalSharesConfigured} Shares",
                         icon = Icons.Rounded.Group,
                         accentColor = EmeraldPrimary,
-                        modifier = Modifier.weight(1f)
+                        onClick = onGoToMembers,
+                        modifier = Modifier.weight(1f).testTag("kpi_members")
                     )
                 }
 
@@ -384,18 +406,20 @@ fun DashboardScreen(
                     KpiMetricCard(
                         title = strings.totalCollected,
                         value = FormatUtils.formatMoney(summary.currentMonthCollected, currency),
-                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} • Target: ${FormatUtils.formatCompactNumber(summary.monthlyCollectionTarget)}",
+                        subtitle = "${strings.paidMembers}: ${summary.paidMembersCount} • Today: ${FormatUtils.formatCompactNumber(summary.dailyCollectionToday)}",
                         icon = Icons.Rounded.CheckCircle,
                         accentColor = StatusPaidGreen,
-                        modifier = Modifier.weight(1f)
+                        onClick = onOpenPaidDetail,
+                        modifier = Modifier.weight(1f).testTag("kpi_paid")
                     )
                     KpiMetricCard(
                         title = strings.totalPending,
                         value = FormatUtils.formatMoney(summary.currentMonthPending, currency),
-                        subtitle = "${strings.unpaidMembers}: ${summary.unpaidMembersCount} • ${strings.partialLabel}: ${summary.partialMembersCount}",
+                        subtitle = "${strings.unpaidMembers}: ${summary.unpaidMembersCount} • Overdue: ${summary.overdueMembersCount}",
                         icon = Icons.Rounded.PendingActions,
                         accentColor = if (summary.currentMonthPending == 0L) StatusPaidGreen else StatusUnpaidRed,
-                        modifier = Modifier.weight(1f)
+                        onClick = onOpenUnpaidDetail,
+                        modifier = Modifier.weight(1f).testTag("kpi_pending")
                     )
                 }
 
@@ -412,7 +436,8 @@ fun DashboardScreen(
                         subtitle = "${FormatUtils.formatMoney(summary.nextPayoutAmount, currency)} • ${strings.nextDueDateLabel}: ${summary.nextPaymentDueDate}",
                         icon = Icons.Rounded.EventAvailable,
                         accentColor = GoldAccent,
-                        modifier = Modifier.weight(1f)
+                        onClick = onOpenUpcomingDetail,
+                        modifier = Modifier.weight(1f).testTag("kpi_next_payout")
                     )
                     KpiMetricCard(
                         title = strings.totalPayoutsLabel,
@@ -420,16 +445,19 @@ fun DashboardScreen(
                         subtitle = "${strings.completedPayouts}: ${summary.completedPayouts}/${summary.totalMonths} • Left: ${summary.remainingMonths}m",
                         icon = Icons.Rounded.AccountBalanceWallet,
                         accentColor = EmeraldPrimary,
-                        modifier = Modifier.weight(1f)
+                        onClick = onGoToReports,
+                        modifier = Modifier.weight(1f).testTag("kpi_payouts")
                     )
                 }
             }
         }
 
-        // Monthly Progress Bar
+        // Monthly Progress Bar (clickable -> Payments)
         item {
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onGoToInstallments() },
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
@@ -471,7 +499,71 @@ fun DashboardScreen(
             }
         }
 
-        // Live Paid / Unpaid & Recipients / Next-in-Line Summaries
+        // 16 Interactive Admin Modules (every item performs a real function)
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Dashboard Sections (16 Modules)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    FilledTonalButton(
+                        onClick = onOpenNotifications,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.testTag("dashboard_notifications_btn")
+                    ) {
+                        Icon(Icons.Rounded.Notifications, contentDescription = strings.notificationsTitle, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("${strings.notificationsTitle}${if (unreadNotificationCount > 0) " ($unreadNotificationCount)" else ""}", maxLines = 1)
+                    }
+                }
+
+                val heldLabel = if (forwardSummary != null) {
+                    "Held ${FormatUtils.formatCompactNumber(forwardSummary.amountCurrentlyHeldByAdmin)}"
+                } else {
+                    "Organizers & Proof"
+                }
+                val tiles = listOf(
+                    DashboardTile("1. Total Members", "${summary.activeMemberCount} Active", Icons.Rounded.Group, EmeraldPrimary, "tile_total_members", onGoToMembers),
+                    DashboardTile("2. Add New Member", "ID, Father, Shares", Icons.Rounded.PersonAdd, EmeraldPrimary, "tile_add_member", onQuickAddMember),
+                    DashboardTile("3. Monthly Collection", FormatUtils.formatCompactNumber(summary.currentMonthCollected), Icons.Rounded.Payments, StatusPaidGreen, "tile_monthly_collection", onGoToInstallments),
+                    DashboardTile("4. Paid Members", "${paidMonthList.size} Paid", Icons.Rounded.CheckCircle, StatusPaidGreen, "tile_paid_members", onOpenPaidDetail),
+                    DashboardTile("5. Unpaid Members", "${unpaidMonthList.size} Due / Overdue", Icons.Rounded.PendingActions, StatusUnpaidRed, "tile_unpaid_members", onOpenUnpaidDetail),
+                    DashboardTile("6. Pending Payments", FormatUtils.formatCompactNumber(summary.currentMonthPending), Icons.Rounded.AccountBalanceWallet, StatusPendingYellow, "tile_pending_payments", onGoToPendingInstallments),
+                    DashboardTile("7. Committee Winners", "${paidRecipients.size} Won • Draw", Icons.Rounded.EmojiEvents, GoldAccent, "tile_winners", onGoToTurns),
+                    DashboardTile("8. Upcoming Committee", summary.nextPayoutTurn?.recipientName ?: "Schedule", Icons.Rounded.EventAvailable, GoldAccent, "tile_upcoming", onOpenUpcomingDetail),
+                    DashboardTile("9. Previous History", "Archive & Cycles", Icons.Rounded.History, EmeraldPrimary, "tile_prev_history", onGoToOldHistory),
+                    DashboardTile("10. Send Messages", "Urdu WA / SMS / App", Icons.Rounded.Sms, EmeraldPrimary, "tile_send_messages", onGoToReminders),
+                    DashboardTile("11. Payment Reports", "11 PDF + Excel", Icons.Rounded.PictureAsPdf, EmeraldPrimary, "tile_payment_reports", onGoToReports),
+                    DashboardTile("12. Member Management", "Search, Edit, PIN", Icons.Rounded.Group, EmeraldPrimary, "tile_member_mgmt", onGoToMembers),
+                    DashboardTile("13. Committee Mgmt", "${summary.totalActiveCommittees} Active", Icons.Rounded.AccountBalance, EmeraldPrimary, "tile_committee_mgmt", onGoToCommittees),
+                    DashboardTile("14. Settings", "Company, 03423498631", Icons.Rounded.Settings, EmeraldPrimary, "tile_settings", onGoToSettings),
+                    DashboardTile("15. Backup & Restore", "JSON Save / Load", Icons.Rounded.Backup, EmeraldPrimary, "tile_backup_restore", onOpenBackupRestore),
+                    DashboardTile("16. Forward Payments", heldLabel, Icons.Rounded.ForwardToInbox, EmeraldPrimary, "tile_forward_payments", onGoToForwardPayments)
+                )
+
+                tiles.chunked(3).forEach { rowTiles ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        rowTiles.forEach { tile ->
+                            DashboardModuleTileCard(tile = tile, modifier = Modifier.weight(1f))
+                        }
+                        repeat(3 - rowTiles.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+
+        // Live Paid / Unpaid & Recipients / Next-in-Line Summaries (All clickable)
         item {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 DashboardMiniListCard(
@@ -479,21 +571,24 @@ fun DashboardScreen(
                     items = paidMonthList.map { "#${it.committeeNumber} ${it.memberName} — ${FormatUtils.formatMoney(it.paidAmount, currency)}" },
                     emptyText = "No paid installments recorded yet for this month.",
                     badgeColor = StatusPaidGreen,
-                    badgeBg = StatusPaidBg
+                    badgeBg = StatusPaidBg,
+                    onClick = onOpenPaidDetail
                 )
                 DashboardMiniListCard(
                     title = "${strings.unpaidMembers} / ${strings.partialLabel} (${unpaidMonthList.size})",
                     items = unpaidMonthList.map { "#${it.committeeNumber} ${it.memberName} — Due ${FormatUtils.formatMoney(it.remainingAmount, currency)}" },
                     emptyText = "All members have paid for this month.",
                     badgeColor = StatusUnpaidRed,
-                    badgeBg = StatusUnpaidBg
+                    badgeBg = StatusUnpaidBg,
+                    onClick = onOpenUnpaidDetail
                 )
                 DashboardMiniListCard(
                     title = "Committee Recipients (${paidRecipients.size} Paid • ${nextInLineRecipients.size} Next in Line)",
                     items = paidRecipients.map { "✓ $it" } + nextInLineRecipients.map { "→ Next: $it" },
                     emptyText = "No committee turns configured yet.",
                     badgeColor = StatusPendingYellow,
-                    badgeBg = StatusPendingBg
+                    badgeBg = StatusPendingBg,
+                    onClick = onGoToTurns
                 )
             }
         }
@@ -603,16 +698,74 @@ fun DashboardScreen(
     }
 }
 
+private data class DashboardTile(
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val accent: Color,
+    val testTag: String,
+    val onClick: () -> Unit
+)
+
+@Composable
+private fun DashboardModuleTileCard(
+    tile: DashboardTile,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .clickable { tile.onClick() }
+            .testTag(tile.testTag),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Surface(
+                color = tile.accent.copy(alpha = 0.14f),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.size(28.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(tile.icon, contentDescription = tile.title, tint = tile.accent, modifier = Modifier.size(16.dp))
+                }
+            }
+            Text(
+                text = tile.title,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = tile.subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = tile.accent,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
 @Composable
 private fun DashboardMiniListCard(
     title: String,
     items: List<String>,
     emptyText: String,
     badgeColor: Color,
-    badgeBg: Color
+    badgeBg: Color,
+    onClick: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {

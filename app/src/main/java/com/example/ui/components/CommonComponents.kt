@@ -2,6 +2,7 @@ package com.example.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -72,6 +73,7 @@ fun InstallmentStatusBadge(status: InstallmentStatus, strings: UiStrings) {
         InstallmentStatus.PAID -> Triple(StatusPaidBg, StatusPaidGreen, strings.paidLabel)
         InstallmentStatus.UNPAID -> Triple(StatusUnpaidBg, StatusUnpaidRed, strings.unpaidLabel)
         InstallmentStatus.PARTIAL -> Triple(StatusPendingBg, StatusPendingYellow, strings.partialLabel)
+        InstallmentStatus.OVERDUE -> Triple(StatusUnpaidBg, StatusUnpaidRed, strings.overdueLabel)
     }
     Surface(
         color = bg,
@@ -132,10 +134,14 @@ fun KpiMetricCard(
     subtitle: String? = null,
     icon: ImageVector,
     accentColor: Color = MaterialTheme.colorScheme.primary,
+    onClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val cardModifier = if (onClick != null) {
+        modifier.clickable { onClick() }
+    } else modifier
     Card(
-        modifier = modifier,
+        modifier = cardModifier,
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)

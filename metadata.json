@@ -1,6 +1,6 @@
 {
-  "name": "GM HASMANI COMMITTEE",
-  "description": "Permanent committee (Kameti) management system for GM HASMANI COMMITTEE with multi-committee shares, turn tracking, 28th-8th schedules, Easypaisa payment requests, historical records, and 9 PDF reports.",
+  "name": "G M S R HASHMANI THAR",
+  "description": "Official offline-first Committee Management System for G M S R HASHMANI THAR with multi-committee shares, transparent winner draws, 28th-8th schedules, Urdu WhatsApp/SMS notifications, PDF/Excel reports, printable receipts, and privacy-protected Member Portal.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

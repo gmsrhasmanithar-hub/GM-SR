@@ -71,7 +71,7 @@ fun MembersScreen(
     onCreateCommittee: () -> Unit,
     onAddMember: () -> Unit,
     onEditMember: (CommitteeMember) -> Unit,
-    onArchiveMember: (CommitteeMember) -> Unit,
+    onToggleMemberActive: (CommitteeMember) -> Unit,
     onDeleteMember: (CommitteeMember) -> Unit,
     onViewMemberDetail: (CommitteeMember) -> Unit
 ) {
@@ -107,21 +107,27 @@ fun MembersScreen(
         else base.filter {
             it.name.lowercase().contains(q) ||
                 it.phone.lowercase().contains(q) ||
+                it.displayMemberId.lowercase().contains(q) ||
+                it.fatherName.lowercase().contains(q) ||
                 it.committeeNumber.toString() == q
         }
     }
 
     memberPendingArchive?.let { m ->
+        val isActive = m.memberStatusEnum == MemberStatus.ACTIVE
         AlertDialog(
             onDismissRequest = { memberPendingArchive = null },
-            title = { Text(strings.archiveMember) },
+            title = { Text(if (isActive) strings.deactivateMemberLabel else strings.activateMemberLabel) },
             text = {
-                Text("Archive ${m.name} from the active committee? Their past payment & payout history will remain preserved.")
+                Text(
+                    if (isActive) "Deactivate ${m.name} (${m.displayMemberId})? Their past payment & payout history will remain preserved."
+                    else "Re-activate ${m.name} (${m.displayMemberId}) in this committee?"
+                )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        onArchiveMember(m)
+                        onToggleMemberActive(m)
                         memberPendingArchive = null
                     }
                 ) { Text(strings.confirm) }
@@ -273,14 +279,18 @@ fun MembersScreen(
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = member.name,
+                                    text = "${member.displayMemberId} • ${member.name}",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                val subMeta = buildString {
+                                    if (member.fatherName.isNotBlank()) append("S/O ${member.fatherName} • ")
+                                    append("${member.phone} • ${FormatUtils.formatShares(member.effectiveShares)} Share(s) (${FormatUtils.formatMoney(monthlyDue, currency)}/mo)")
+                                }
                                 Text(
-                                    text = "${member.phone} • ${FormatUtils.formatShares(member.effectiveShares)} Share(s) (${FormatUtils.formatMoney(monthlyDue, currency)}/mo)",
+                                    text = subMeta,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -306,21 +316,22 @@ fun MembersScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(strings.viewLabel, maxLines = 1)
                             }
-                            if (member.memberStatusEnum == MemberStatus.ACTIVE) {
-                                OutlinedButton(
-                                    onClick = { onEditMember(member) },
-                                    shape = RoundedCornerShape(10.dp),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(strings.editLabel, maxLines = 1)
-                                }
-                                IconButton(
-                                    onClick = { memberPendingArchive = member }
-                                ) {
-                                    Icon(Icons.Rounded.Archive, contentDescription = strings.archiveMember)
-                                }
+                            OutlinedButton(
+                                onClick = { onEditMember(member) },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Rounded.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(strings.editLabel, maxLines = 1)
+                            }
+                            IconButton(
+                                onClick = { memberPendingArchive = member }
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Archive,
+                                    contentDescription = if (member.memberStatusEnum == MemberStatus.ACTIVE) strings.deactivateMemberLabel else strings.activateMemberLabel
+                                )
                             }
                             IconButton(
                                 onClick = { onDeleteMember(member) },

@@ -19,11 +19,13 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Casino
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.VerifiedUser
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -32,23 +34,33 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
 import com.example.i18n.UiStrings
 import com.example.model.Committee
+import com.example.model.CommitteeMember
 import com.example.model.CommitteeTurn
 import com.example.model.FormatUtils
 import com.example.model.MonthUtils
 import com.example.model.PayoutStatus
 import com.example.ui.components.EmptyCommitteePrompt
 import com.example.ui.components.PayoutStatusBadge
+import com.example.ui.theme.GoldAccent
 import com.example.ui.theme.StatusPaidGreen
 import com.example.ui.theme.StatusPendingYellow
 import com.example.ui.theme.StatusUnpaidRed
@@ -67,7 +79,8 @@ fun CommitteeTurnsScreen(
     onRevertTurnPending: (CommitteeTurn) -> Unit,
     onDeleteTurn: (CommitteeTurn) -> Unit,
     onGenerateFromShares: () -> Unit,
-    onLoadKnownTurns: () -> Unit
+    onDrawRandomWinner: () -> CommitteeMember?,
+    onConfirmRandomWinner: (member: CommitteeMember, payoutAmount: Long, payoutDate: String, alsoNotify: Boolean) -> Unit
 ) {
     if (committee == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -79,6 +92,101 @@ fun CommitteeTurnsScreen(
     val sortedTurns = remember(turns) { turns.sortedBy { it.turnNumber } }
     val paidCount = sortedTurns.count { it.statusEnum == PayoutStatus.PAID }
     val pendingCount = sortedTurns.count { it.statusEnum == PayoutStatus.PENDING }
+
+    var drawnCandidate by remember { mutableStateOf<CommitteeMember?>(null) }
+    var noEligiblePrompt by remember { mutableStateOf(false) }
+
+    if (noEligiblePrompt) {
+        AlertDialog(
+            onDismissRequest = { noEligiblePrompt = false },
+            title = { Text(strings.randomDrawLabel, fontWeight = FontWeight.Bold) },
+            text = { Text("All active member shares have already received their committee payout turns, or no active members exist yet.") },
+            confirmButton = {
+                TextButton(onClick = { noEligiblePrompt = false }) { Text(strings.close) }
+            }
+        )
+    }
+
+    drawnCandidate?.let { winner ->
+        var amountText by remember(winner.id) { mutableStateOf(committee.eachPayoutAmount.toString()) }
+        var dateText by remember(winner.id) { mutableStateOf(MonthUtils.todayDateString()) }
+        var sendAnnouncement by remember(winner.id) { mutableStateOf(true) }
+        AlertDialog(
+            onDismissRequest = { drawnCandidate = null },
+            icon = { Icon(Icons.Rounded.Casino, contentDescription = null, tint = GoldAccent) },
+            title = { Text("Random Winner Draw • Admin Confirmation", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Drawn fairly from eligible active members who still hold remaining unpaid turns:")
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "${winner.displayMemberId} • #${winner.committeeNumber} ${winner.name}",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = "${winner.phone} • ${FormatUtils.formatShares(winner.effectiveShares)} Share(s)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = amountText,
+                        onValueChange = { amountText = it.filter { c -> c.isDigit() } },
+                        label = { Text("${strings.payoutAmountLabel} ($currency)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = dateText,
+                        onValueChange = { dateText = it },
+                        label = { Text(strings.paymentDate) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Send Urdu Winner Notification", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                        Switch(checked = sendAnnouncement, onCheckedChange = { sendAnnouncement = it })
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val amt = amountText.toLongOrNull()?.coerceAtLeast(1L) ?: committee.eachPayoutAmount
+                        val dt = dateText.trim().ifEmpty { MonthUtils.todayDateString() }
+                        onConfirmRandomWinner(winner, amt, dt, sendAnnouncement)
+                        drawnCandidate = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = StatusPaidGreen),
+                    modifier = Modifier.testTag("confirm_random_winner_btn")
+                ) {
+                    Text(strings.confirm)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { drawnCandidate = onDrawRandomWinner() }) {
+                        Text("Re-Draw")
+                    }
+                    TextButton(onClick = { drawnCandidate = null }) {
+                        Text(strings.cancel)
+                    }
+                }
+            }
+        )
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -134,16 +242,18 @@ fun CommitteeTurnsScreen(
                             Text(strings.generateTurnsFromSharesLabel, maxLines = 1)
                         }
                     }
-                    if (sortedTurns.size < 4) {
-                        OutlinedButton(
-                            onClick = onLoadKnownTurns,
-                            modifier = Modifier.fillMaxWidth().testTag("load_known_turns_btn"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(strings.loadKnownTurnsLabel, maxLines = 1)
-                        }
+                    Button(
+                        onClick = {
+                            val picked = onDrawRandomWinner()
+                            if (picked != null) drawnCandidate = picked else noEligiblePrompt = true
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
+                        modifier = Modifier.fillMaxWidth().testTag("random_draw_btn"),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Rounded.Casino, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("${strings.randomDrawLabel} (Admin Confirm)", maxLines = 1, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -161,7 +271,7 @@ fun CommitteeTurnsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
-                            text = "No committee turns yet. Tap Add Turn, Generate from Shares, or Load Known Turns 1–4.",
+                            text = "No committee turns yet. Tap Add Turn or Generate from Shares.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

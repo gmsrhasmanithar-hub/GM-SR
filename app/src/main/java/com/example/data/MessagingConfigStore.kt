@@ -21,7 +21,7 @@ data class MessagingGatewayConfig(
     val whatsappAccessToken: String = "",
     val smsGatewayUrl: String = "",
     val smsGatewayApiKey: String = "",
-    val smsSenderId: String = "GM HASMANI",
+    val smsSenderId: String = "G M S R HASHMANI THAR",
     val localLanguageCode: String = "en",
     val syncWebhookUrl: String = ""
 ) {
@@ -86,27 +86,51 @@ class MessagingConfigStore(private val context: Context) {
             whatsappAccessToken = prefs[Keys.WA_ACCESS_TOKEN] ?: "",
             smsGatewayUrl = prefs[Keys.SMS_GATEWAY_URL] ?: "",
             smsGatewayApiKey = prefs[Keys.SMS_GATEWAY_API_KEY] ?: "",
-            smsSenderId = prefs[Keys.SMS_SENDER_ID] ?: "GM HASMANI",
+            smsSenderId = prefs[Keys.SMS_SENDER_ID]?.takeIf {
+                it.isNotBlank() && it != "GM HASMANI"
+            } ?: "G M S R HASHMANI THAR",
             localLanguageCode = prefs[Keys.LANGUAGE] ?: "en",
             syncWebhookUrl = prefs[Keys.SYNC_WEBHOOK_URL] ?: ""
         )
     }
 
     val companySettingsFlow: Flow<AppCompanySettings> = context.messagingDataStore.data.map { prefs ->
+        val rawCompany = prefs[Keys.COMPANY_NAME]?.trim().orEmpty()
+        val migratedCompany = when {
+            rawCompany.isEmpty() ||
+                rawCompany.equals("GM HASMANI COMMITTEE", ignoreCase = true) ||
+                rawCompany.equals("GM HASMANI COMMITTEE MANAGER", ignoreCase = true) ||
+                rawCompany.equals("GM Hasmani Committee Manager", ignoreCase = true) -> "G M S R HASHMANI THAR"
+            else -> rawCompany
+        }
+        val rawAppName = prefs[Keys.APPLICATION_NAME]?.trim().orEmpty()
+        val migratedAppName = when {
+            rawAppName.isEmpty() ||
+                rawAppName.equals("GM Hasmani Committee Manager", ignoreCase = true) ||
+                rawAppName.equals("GM HASMANI COMMITTEE", ignoreCase = true) -> "G M S R HASHMANI THAR"
+            else -> rawAppName
+        }
+        val rawFooter = prefs[Keys.PDF_FOOTER_NOTE]?.trim().orEmpty()
+        val migratedFooter = when {
+            rawFooter.isEmpty() ||
+                rawFooter.equals("Official GM HASMANI Committee Record", ignoreCase = true) ->
+                "Official G M S R HASHMANI THAR Committee Record • 03423498631"
+            else -> rawFooter
+        }
         AppCompanySettings(
-            companyName = prefs[Keys.COMPANY_NAME] ?: "GM HASMANI COMMITTEE",
-            applicationName = prefs[Keys.APPLICATION_NAME] ?: "GM Hasmani Committee Manager",
-            adminName = prefs[Keys.ADMIN_NAME] ?: "GM Hasmani Admin",
-            adminContactNumber = prefs[Keys.ADMIN_CONTACT] ?: "",
+            companyName = migratedCompany,
+            applicationName = migratedAppName,
+            adminName = prefs[Keys.ADMIN_NAME]?.takeIf { it.isNotBlank() } ?: "G M S R HASHMANI THAR Admin",
+            adminContactNumber = prefs[Keys.ADMIN_CONTACT]?.takeIf { it.isNotBlank() } ?: "03423498631",
             easypaisaNumber = prefs[Keys.EASYPAISA_NUMBER]?.takeIf { it.isNotBlank() } ?: "03423498631",
-            easypaisaAccountHolder = prefs[Keys.EASYPAISA_HOLDER]?.takeIf { it.isNotBlank() } ?: "GM Hasmani Admin",
+            easypaisaAccountHolder = prefs[Keys.EASYPAISA_HOLDER]?.takeIf { it.isNotBlank() } ?: "G M S R HASHMANI THAR",
             currency = prefs[Keys.CURRENCY]?.takeIf { it.isNotBlank() } ?: "PKR",
             defaultMonthlyContribution = prefs[Keys.DEFAULT_CONTRIBUTION] ?: 5000L,
             defaultTotalShares = prefs[Keys.DEFAULT_SHARES] ?: 10L,
             defaultCollectionStartDay = prefs[Keys.DEFAULT_START_DAY] ?: 28L,
             defaultCollectionEndDay = prefs[Keys.DEFAULT_END_DAY] ?: 8L,
             defaultDurationMonths = prefs[Keys.DEFAULT_DURATION_MONTHS] ?: 10L,
-            pdfFooterNote = prefs[Keys.PDF_FOOTER_NOTE] ?: "Official GM HASMANI Committee Record"
+            pdfFooterNote = migratedFooter
         )
     }
 
@@ -151,19 +175,21 @@ class MessagingConfigStore(private val context: Context) {
 
     suspend fun saveCompanySettings(settings: AppCompanySettings) {
         context.messagingDataStore.edit { prefs ->
-            prefs[Keys.COMPANY_NAME] = settings.companyName.trim().ifEmpty { "GM HASMANI COMMITTEE" }
-            prefs[Keys.APPLICATION_NAME] = settings.applicationName.trim().ifEmpty { "GM Hasmani Committee Manager" }
-            prefs[Keys.ADMIN_NAME] = settings.adminName.trim().ifEmpty { "GM Hasmani Admin" }
-            prefs[Keys.ADMIN_CONTACT] = settings.adminContactNumber.trim()
+            prefs[Keys.COMPANY_NAME] = settings.companyName.trim().ifEmpty { "G M S R HASHMANI THAR" }
+            prefs[Keys.APPLICATION_NAME] = settings.applicationName.trim().ifEmpty { "G M S R HASHMANI THAR" }
+            prefs[Keys.ADMIN_NAME] = settings.adminName.trim().ifEmpty { "G M S R HASHMANI THAR Admin" }
+            prefs[Keys.ADMIN_CONTACT] = settings.adminContactNumber.trim().ifEmpty { "03423498631" }
             prefs[Keys.EASYPAISA_NUMBER] = settings.easypaisaNumber.trim().ifEmpty { "03423498631" }
-            prefs[Keys.EASYPAISA_HOLDER] = settings.easypaisaAccountHolder.trim().ifEmpty { "GM Hasmani Admin" }
+            prefs[Keys.EASYPAISA_HOLDER] = settings.easypaisaAccountHolder.trim().ifEmpty { "G M S R HASHMANI THAR" }
             prefs[Keys.CURRENCY] = settings.currency.trim().ifEmpty { "PKR" }
             prefs[Keys.DEFAULT_CONTRIBUTION] = settings.defaultMonthlyContribution.coerceIn(100L, 10_000_000L)
             prefs[Keys.DEFAULT_SHARES] = settings.defaultTotalShares.coerceIn(2L, 500L)
             prefs[Keys.DEFAULT_START_DAY] = settings.defaultCollectionStartDay.coerceIn(1L, 31L)
             prefs[Keys.DEFAULT_END_DAY] = settings.defaultCollectionEndDay.coerceIn(1L, 31L)
             prefs[Keys.DEFAULT_DURATION_MONTHS] = settings.defaultDurationMonths.coerceIn(2L, 200L)
-            prefs[Keys.PDF_FOOTER_NOTE] = settings.pdfFooterNote.trim().ifEmpty { "Official GM HASMANI Committee Record" }
+            prefs[Keys.PDF_FOOTER_NOTE] = settings.pdfFooterNote.trim().ifEmpty {
+                "Official G M S R HASHMANI THAR Committee Record • 03423498631"
+            }
         }
     }
 
@@ -179,7 +205,7 @@ class MessagingConfigStore(private val context: Context) {
             prefs[Keys.WA_ACCESS_TOKEN] = whatsappAccessToken.trim()
             prefs[Keys.SMS_GATEWAY_URL] = smsGatewayUrl.trim()
             prefs[Keys.SMS_GATEWAY_API_KEY] = smsGatewayApiKey.trim()
-            prefs[Keys.SMS_SENDER_ID] = smsSenderId.trim().ifEmpty { "GM HASMANI" }
+            prefs[Keys.SMS_SENDER_ID] = smsSenderId.trim().ifEmpty { "G M S R HASHMANI THAR" }
         }
     }
 

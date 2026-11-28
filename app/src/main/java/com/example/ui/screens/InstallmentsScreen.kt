@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Sync
@@ -84,6 +85,7 @@ fun InstallmentsScreen(
     onQuickMarkPaid: (InstallmentRecord) -> Unit,
     onEditPayment: (InstallmentRecord) -> Unit,
     onDeleteInstallment: (InstallmentRecord) -> Unit,
+    onViewReceipt: (InstallmentRecord, CommitteeMember?) -> Unit,
     onQuickWhatsApp: (CommitteeMember, Long) -> Unit,
     onQuickSms: (CommitteeMember, Long) -> Unit,
     onOpenActivityHistory: () -> Unit,
@@ -105,23 +107,32 @@ fun InstallmentsScreen(
 
     val totalReceived = monthRecords.sumOf { it.paidAmount }
     val totalRemaining = monthRecords.sumOf { it.remainingAmount }
-    val paidCount = monthRecords.count { it.statusEnum == InstallmentStatus.PAID }
-    val unpaidCount = monthRecords.count { it.statusEnum == InstallmentStatus.UNPAID }
-    val partialCount = monthRecords.count { it.statusEnum == InstallmentStatus.PARTIAL }
+    val paidCount = monthRecords.count { it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.PAID }
+    val overdueCount = monthRecords.count { it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.OVERDUE }
+    val unpaidCount = monthRecords.count {
+        val st = it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd)
+        st == InstallmentStatus.UNPAID || st == InstallmentStatus.OVERDUE
+    }
+    val partialCount = monthRecords.count { it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.PARTIAL }
     val hasUnpaidInMonth = monthRecords.any { it.paidAmount == 0L }
 
-    val visibleRecords = remember(monthRecords, activeFilter, searchText) {
+    val visibleRecords = remember(monthRecords, activeFilter, searchText, committee.collectionDayStart, committee.collectionDayEnd) {
         val byStatus = when (activeFilter) {
             InstallmentFilter.ALL -> monthRecords
-            InstallmentFilter.PAID -> monthRecords.filter { it.statusEnum == InstallmentStatus.PAID }
-            InstallmentFilter.UNPAID -> monthRecords.filter { it.statusEnum == InstallmentStatus.UNPAID }
-            InstallmentFilter.PARTIAL -> monthRecords.filter { it.statusEnum == InstallmentStatus.PARTIAL }
+            InstallmentFilter.PAID -> monthRecords.filter { it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.PAID }
+            InstallmentFilter.UNPAID -> monthRecords.filter {
+                val st = it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd)
+                st == InstallmentStatus.UNPAID || st == InstallmentStatus.OVERDUE
+            }
+            InstallmentFilter.PARTIAL -> monthRecords.filter { it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.PARTIAL }
+            InstallmentFilter.OVERDUE -> monthRecords.filter { it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.OVERDUE }
         }
         val q = searchText.trim().lowercase()
         if (q.isEmpty()) byStatus
         else byStatus.filter {
             it.memberName.lowercase().contains(q) ||
                 it.memberPhone.lowercase().contains(q) ||
+                (it.receiptNumber?.lowercase()?.contains(q) == true) ||
                 (it.transactionId?.lowercase()?.contains(q) == true)
         }
     }
@@ -272,6 +283,11 @@ fun InstallmentsScreen(
                         onClick = { onSelectFilter(InstallmentFilter.PARTIAL) },
                         label = { Text("${strings.partialLabel} ($partialCount)") }
                     )
+                    FilterChip(
+                        selected = activeFilter == InstallmentFilter.OVERDUE,
+                        onClick = { onSelectFilter(InstallmentFilter.OVERDUE) },
+                        label = { Text("${strings.overdueLabel} ($overdueCount)") }
+                    )
                 }
             }
         }
@@ -303,6 +319,7 @@ fun InstallmentsScreen(
         } else {
             items(visibleRecords, key = { it.id }) { rec ->
                 val member = memberMap[rec.memberId]
+                val effectiveStatus = rec.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd)
                 Card(
                     modifier = Modifier.fillMaxWidth().testTag("installment_card_${rec.id}"),
                     shape = RoundedCornerShape(16.dp),
@@ -326,6 +343,7 @@ fun InstallmentsScreen(
                                 Text(
                                     text = rec.memberPhone +
                                         (if (rec.paidAmount > 0L) " • ${rec.paymentMethodEnum.label}" else "") +
+                                        (rec.receiptNumber?.let { " • $it" } ?: "") +
                                         (rec.transactionId?.let { " • Tx: $it" } ?: "") +
                                         (rec.paymentDate?.let { " • $it" } ?: ""),
                                     style = MaterialTheme.typography.bodySmall,
@@ -334,15 +352,15 @@ fun InstallmentsScreen(
                                 Text(
                                     text = "${FormatUtils.formatMoney(rec.paidAmount, currency)} / ${FormatUtils.formatMoney(rec.dueAmount, currency)}",
                                     style = MaterialTheme.typography.labelLarge,
-                                    color = when (rec.statusEnum) {
+                                    color = when (effectiveStatus) {
                                         InstallmentStatus.PAID -> StatusPaidGreen
                                         InstallmentStatus.PARTIAL -> StatusPendingYellow
-                                        InstallmentStatus.UNPAID -> StatusUnpaidRed
+                                        InstallmentStatus.UNPAID, InstallmentStatus.OVERDUE -> StatusUnpaidRed
                                     },
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-                            InstallmentStatusBadge(rec.statusEnum, strings)
+                            InstallmentStatusBadge(effectiveStatus, strings)
                         }
 
                         Row(
@@ -350,7 +368,7 @@ fun InstallmentsScreen(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (rec.statusEnum != InstallmentStatus.PAID) {
+                            if (effectiveStatus != InstallmentStatus.PAID) {
                                 Button(
                                     onClick = { onQuickMarkPaid(rec) },
                                     colors = ButtonDefaults.buttonColors(containerColor = StatusPaidGreen),
@@ -377,6 +395,18 @@ fun InstallmentsScreen(
                                 }
                             }
 
+                            if (rec.paidAmount > 0L) {
+                                OutlinedButton(
+                                    onClick = { onViewReceipt(rec, member) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("receipt_btn_${rec.id}")
+                                ) {
+                                    Icon(Icons.Rounded.ReceiptLong, contentDescription = strings.viewReceiptLabel, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(strings.viewReceiptLabel, maxLines = 1)
+                                }
+                            }
+
                             OutlinedButton(
                                 onClick = { onEditPayment(rec) },
                                 shape = RoundedCornerShape(12.dp),
@@ -396,7 +426,7 @@ fun InstallmentsScreen(
                                 }
                             }
 
-                            if (rec.statusEnum != InstallmentStatus.PAID && member != null) {
+                            if (effectiveStatus != InstallmentStatus.PAID && member != null) {
                                 IconButton(
                                     onClick = { onQuickWhatsApp(member, rec.remainingAmount.coerceAtLeast(rec.dueAmount)) }
                                 ) {

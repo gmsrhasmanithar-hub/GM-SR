@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.ApiSendResult
 import com.example.data.CommitteeRepository
+import com.example.data.FinancialReportExporter
 import com.example.data.MessagingConfigStore
 import com.example.data.MessagingGateway
 import com.example.data.MessagingGatewayConfig
@@ -23,12 +24,18 @@ import com.example.model.CommitteeUtils
 import com.example.model.DashboardSummary
 import com.example.model.DispatchStatus
 import com.example.model.DuplicateConflictType
+import com.example.model.ForwardFinancialCalculator
+import com.example.model.ForwardFinancialSummary
+import com.example.model.ForwardOrganizer
+import com.example.model.ForwardPaymentRecord
+import com.example.model.InAppNotification
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.LocalUser
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.MonthlyChartPoint
+import com.example.model.NotificationType
 import com.example.model.OldCommitteeRecord
 import com.example.model.OldHistoryCsvUtils
 import com.example.model.PasswordHasher
@@ -40,6 +47,7 @@ import com.example.model.ReminderLog
 import com.example.model.ReminderStage
 import com.example.model.UploadQueueItem
 import com.example.model.UploadQueueStatus
+import com.example.model.UrduMessageType
 import com.example.model.UserRole
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -66,7 +74,7 @@ sealed interface UiState<out T> {
     data class Error(val message: String) : UiState<Nothing>
 }
 
-enum class InstallmentFilter { ALL, PAID, UNPAID, PARTIAL }
+enum class InstallmentFilter { ALL, PAID, UNPAID, PARTIAL, OVERDUE }
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CommitteeViewModel(
@@ -109,6 +117,50 @@ class CommitteeViewModel(
 
     val isLoggedOut: StateFlow<Boolean> = configStore.isLoggedOutFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), false)
+
+    private val _memberSession = MutableStateFlow<CommitteeMember?>(null)
+    val memberSession: StateFlow<CommitteeMember?> = _memberSession.asStateFlow()
+
+    val allNotifications: StateFlow<List<InAppNotification>> = repository.observeNotifications()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val memberNotifications: StateFlow<List<InAppNotification>> = memberSession
+        .flatMapLatest { member ->
+            if (member == null) flowOf(emptyList())
+            else repository.observeNotificationsForMember(member.id).catch { emit(emptyList()) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val memberCommittee: StateFlow<Committee?> = combine(
+        memberSession,
+        repository.observeCommittees().catch { emit(emptyList()) }
+    ) { member, committees ->
+        if (member == null) null else committees.firstOrNull { it.id == member.committeeId }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
+    val memberInstallments: StateFlow<List<InstallmentRecord>> = memberSession
+        .flatMapLatest { member ->
+            if (member == null) flowOf(emptyList())
+            else repository.observeInstallments(member.committeeId)
+                .map { rows -> rows.filter { it.memberId == member.id }.sortedBy { it.monthIndex } }
+                .catch { emit(emptyList()) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val memberTurns: StateFlow<List<CommitteeTurn>> = memberSession
+        .flatMapLatest { member ->
+            if (member == null) flowOf(emptyList())
+            else repository.observeTurns(member.committeeId)
+                .map { turns ->
+                    turns.filter {
+                        it.recipientMemberId == member.id ||
+                            it.recipientName.equals(member.name, ignoreCase = true)
+                    }.sortedBy { it.turnNumber }
+                }
+                .catch { emit(emptyList()) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     val currentUser: StateFlow<LocalUser?> = combine(
         localUsers,
@@ -220,6 +272,64 @@ class CommitteeViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
+    val forwardOrganizersState: StateFlow<List<ForwardOrganizer>> = activeCommitteeIdFlow
+        .flatMapLatest { cid ->
+            if (cid.isBlank()) flowOf(emptyList())
+            else repository.observeForwardOrganizers(cid).catch { emit(emptyList()) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    val forwardPaymentsState: StateFlow<List<ForwardPaymentRecord>> = activeCommitteeIdFlow
+        .flatMapLatest { cid ->
+            if (cid.isBlank()) flowOf(emptyList())
+            else repository.observeForwardPayments(cid).catch { emit(emptyList()) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+
+    private val forwardInputsFlow = combine(
+        activeCommittee,
+        membersState,
+        installmentsState,
+        forwardOrganizersState,
+        forwardPaymentsState
+    ) { committee, membersUi, instUi, organizers, payments ->
+        ForwardCalcInputs(
+            committee = committee,
+            members = (membersUi as? UiState.Success)?.data ?: emptyList(),
+            installments = (instUi as? UiState.Success)?.data ?: emptyList(),
+            organizers = organizers,
+            payments = payments
+        )
+    }
+
+    val forwardMonthlySummary: StateFlow<ForwardFinancialSummary?> = combine(
+        forwardInputsFlow,
+        _selectedMonthKey
+    ) { inputs, monthKey ->
+        val committee = inputs.committee ?: return@combine null
+        ForwardFinancialCalculator.compute(
+            committee = committee,
+            members = inputs.members,
+            installments = inputs.installments,
+            organizers = inputs.organizers,
+            forwardPayments = inputs.payments,
+            monthKey = monthKey
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
+    val forwardOverallSummary: StateFlow<ForwardFinancialSummary?> = forwardInputsFlow
+        .map { inputs ->
+            val committee = inputs.committee ?: return@map null
+            ForwardFinancialCalculator.compute(
+                committee = committee,
+                members = inputs.members,
+                installments = inputs.installments,
+                organizers = inputs.organizers,
+                forwardPayments = inputs.payments,
+                monthKey = null
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+
     private val coreInputsFlow = combine(
         committeesState,
         activeCommittee,
@@ -257,11 +367,7 @@ class CommitteeViewModel(
             if (currentUser.value == null) {
                 configStore.saveSession(admin.id, isLoggedOut = false)
             }
-            val seededId = repository.ensureKnownInitialCommitteeIfEmpty()
-            if (seededId != null && _selectedCommitteeId.value == null) {
-                _selectedCommitteeId.value = seededId
-                configStore.saveActiveCommitteeId(seededId)
-            }
+            repository.backfillMemberCodesAndReceiptsIfNeeded()
         }
 
         viewModelScope.launch {
@@ -333,11 +439,18 @@ class CommitteeViewModel(
         }
         val monthCollected = monthInstallments.sumOf { it.paidAmount }
         val monthPending = (monthlyTarget - monthCollected).coerceAtLeast(0L)
+        val today = MonthUtils.todayDateString()
+        val dailyCollectionToday = installments
+            .filter { it.paymentDate == today && it.paidAmount > 0L }
+            .sumOf { it.paidAmount }
 
         val paidCount = monthInstallments.count { it.statusEnum == InstallmentStatus.PAID }
         val partialCount = monthInstallments.count { it.statusEnum == InstallmentStatus.PARTIAL }
+        val overdueCount = monthInstallments.count {
+            it.effectiveStatus(committee.collectionDayStart, committee.collectionDayEnd) == InstallmentStatus.OVERDUE
+        }
         val unpaidCount = if (monthInstallments.isNotEmpty()) {
-            monthInstallments.count { it.statusEnum == InstallmentStatus.UNPAID }
+            monthInstallments.count { it.statusEnum != InstallmentStatus.PAID }
         } else {
             activeMembers.size
         }
@@ -409,11 +522,13 @@ class CommitteeViewModel(
             monthlyCollectionTarget = monthlyTarget,
             currentMonthCollected = monthCollected,
             currentMonthPending = monthPending,
+            dailyCollectionToday = dailyCollectionToday,
             totalCommitteeCollectedAllMonths = installments.sumOf { it.paidAmount },
             totalCommitteeExpectedAllMonths = committee.totalCommitteeAmount,
             paidMembersCount = paidCount,
             partialMembersCount = partialCount,
             unpaidMembersCount = unpaidCount,
+            overdueMembersCount = overdueCount,
             currentMonthKey = effectiveMonthKey,
             currentMonthIndex = monthIndex,
             totalMonths = committee.totalMonths.toInt(),
@@ -581,7 +696,17 @@ class CommitteeViewModel(
     // Member Actions
     // -------------------------------------------------------------------------
 
-    fun addMember(name: String, phone: String, committeeNumber: Long, shares: Double = 1.0) {
+    fun addMember(
+        name: String,
+        phone: String,
+        committeeNumber: Long,
+        shares: Double = 1.0,
+        memberCode: String = "",
+        fatherName: String = "",
+        address: String = "",
+        joiningDate: String = MonthUtils.todayDateString(),
+        accessPin: String = CommitteeRepository.DEFAULT_MEMBER_PIN
+    ) {
         val committee = activeCommittee.value ?: return
         val existingMembers = (membersState.value as? UiState.Success)?.data ?: emptyList()
         val conflict = CommitteeUtils.findDuplicateMember(existingMembers, phone, committeeNumber)
@@ -597,7 +722,19 @@ class CommitteeViewModel(
         }
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.addMember(committee, name, phone, committeeNumber, shares, actorName())
+            val res = repository.addMember(
+                committee = committee,
+                name = name,
+                phone = phone,
+                committeeNumber = committeeNumber,
+                shares = shares,
+                memberCode = memberCode,
+                fatherName = fatherName,
+                address = address,
+                joiningDate = joiningDate,
+                accessPin = accessPin,
+                actorName = actorName()
+            )
             _isBusy.value = false
             res.onSuccess {
                 _snackbarEvents.tryEmit("Member \"$name\" added (#$committeeNumber).")
@@ -612,7 +749,12 @@ class CommitteeViewModel(
         newName: String,
         newPhone: String,
         newCommitteeNumber: Long,
-        newShares: Double = member.effectiveShares
+        newShares: Double = member.effectiveShares,
+        newMemberCode: String = member.displayMemberId,
+        newFatherName: String = member.fatherName,
+        newAddress: String = member.address,
+        newJoiningDate: String = member.joiningDate,
+        newAccessPin: String = member.accessPin
     ) {
         val committee = activeCommittee.value ?: return
         val existingMembers = (membersState.value as? UiState.Success)?.data ?: emptyList()
@@ -633,9 +775,37 @@ class CommitteeViewModel(
             return
         }
         viewModelScope.launch {
-            repository.updateMember(committee, member, newName, newPhone, newCommitteeNumber, newShares, actorName())
+            repository.updateMember(
+                committee = committee,
+                member = member,
+                newName = newName,
+                newPhone = newPhone,
+                newCommitteeNumber = newCommitteeNumber,
+                newShares = newShares,
+                newMemberCode = newMemberCode,
+                newFatherName = newFatherName,
+                newAddress = newAddress,
+                newJoiningDate = newJoiningDate,
+                newAccessPin = newAccessPin,
+                actorName = actorName()
+            )
                 .onSuccess { _snackbarEvents.tryEmit("Member updated.") }
                 .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update member.") }
+        }
+    }
+
+    fun toggleMemberActive(member: CommitteeMember) {
+        val committee = activeCommittee.value ?: return
+        val nextActive = member.memberStatusEnum != MemberStatus.ACTIVE
+        viewModelScope.launch {
+            repository.setMemberActiveStatus(committee.id, member, nextActive, actorName())
+                .onSuccess {
+                    _snackbarEvents.tryEmit(
+                        if (nextActive) "${member.name} activated."
+                        else "${member.name} deactivated (financial history preserved)."
+                    )
+                }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to update member status.") }
         }
     }
 
@@ -643,8 +813,8 @@ class CommitteeViewModel(
         val committee = activeCommittee.value ?: return
         viewModelScope.launch {
             repository.archiveMember(committee.id, member, actorName())
-                .onSuccess { _snackbarEvents.tryEmit("${member.name} archived (history preserved).") }
-                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to archive member.") }
+                .onSuccess { _snackbarEvents.tryEmit("${member.name} deactivated (history preserved).") }
+                .onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to deactivate member.") }
         }
     }
 
@@ -760,19 +930,27 @@ class CommitteeViewModel(
         }
     }
 
-    fun loadKnownHistoryTurns() {
-        val committee = activeCommittee.value ?: return
+    fun clearAllAppDataForFreshStart(
+        context: Context,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
         viewModelScope.launch {
             _isBusy.value = true
-            val res = repository.loadKnownHistoryTurnsForCommittee(committee.id, actorName())
+            val res = repository.clearAllDataForFreshStart(currentUser.value, adminPassword, context)
+            if (res.isSuccess) {
+                _selectedCommitteeId.value = null
+                _skipAutoSyncMonths.value = emptySet()
+                configStore.saveActiveCommitteeId(null)
+            }
             _isBusy.value = false
-            res.onSuccess { added ->
-                _snackbarEvents.tryEmit(
-                    if (added > 0) "Loaded $added known turn record(s) (Turns 1–4)."
-                    else "Known turns 1–4 already present."
-                )
+            res.onSuccess {
+                _snackbarEvents.tryEmit("All old data cleared. Application is ready for fresh entry.")
+                onResult(true, null)
             }.onFailure {
-                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to load known turns.")
+                val msg = it.localizedMessage ?: "Failed to reset app data."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
             }
         }
     }
@@ -795,6 +973,11 @@ class CommitteeViewModel(
                 onResult(false, msg)
             }
         }
+    }
+
+    fun drawRandomEligibleWinner(): CommitteeMember? {
+        val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        return repository.pickEligibleRandomTurnWinner(members, turnsState.value)
     }
 
     // -------------------------------------------------------------------------
@@ -1017,6 +1200,7 @@ class CommitteeViewModel(
             val res = repository.authenticateUser(username, password)
             _isBusy.value = false
             res.onSuccess { user ->
+                _memberSession.value = null
                 configStore.saveSession(user.id, isLoggedOut = false)
                 _snackbarEvents.tryEmit("Welcome, ${user.displayName}")
             }.onFailure {
@@ -1025,7 +1209,30 @@ class CommitteeViewModel(
         }
     }
 
+    fun loginMember(identifier: String, pin: String, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.authenticateMember(identifier, pin)
+            _isBusy.value = false
+            res.onSuccess { member ->
+                _memberSession.value = member
+                _snackbarEvents.tryEmit("Welcome, ${member.name} (${member.displayMemberId})")
+            }.onFailure {
+                onError(it.localizedMessage ?: "Member sign-in failed")
+            }
+        }
+    }
+
+    fun logoutMember() {
+        _memberSession.value = null
+        viewModelScope.launch {
+            configStore.saveSession(currentUser.value?.id, isLoggedOut = true)
+            _snackbarEvents.tryEmit("Signed out from Member Portal.")
+        }
+    }
+
     fun logout() {
+        _memberSession.value = null
         viewModelScope.launch {
             configStore.saveSession(currentUser.value?.id, isLoggedOut = true)
             _snackbarEvents.tryEmit("Logged out.")
@@ -1284,8 +1491,162 @@ class CommitteeViewModel(
         return launched
     }
 
+    fun renderUrduPreview(
+        type: UrduMessageType,
+        memberName: String,
+        amount: Long,
+        date: String,
+        remainingAmount: Long,
+        adminMessage: String,
+        customTemplate: String? = null
+    ): String = gateway.renderUrduMessage(
+        type = type,
+        memberName = memberName,
+        amount = amount,
+        date = date,
+        remainingAmount = remainingAmount,
+        adminMessage = adminMessage,
+        customTemplate = customTemplate,
+        settings = companySettings.value
+    )
+
+    fun sendUrduMessageAndNotify(
+        context: Context,
+        type: UrduMessageType,
+        recipients: List<CommitteeMember>,
+        installmentsForMonth: List<InstallmentRecord>,
+        customBodyOrTemplate: String,
+        adminMessage: String,
+        winnerDate: String,
+        sendWhatsApp: Boolean,
+        sendSms: Boolean,
+        sendInApp: Boolean,
+        preventDuplicateInApp: Boolean = true
+    ) {
+        val committee = activeCommittee.value ?: return
+        val monthKey = _selectedMonthKey.value
+        val byMember = installmentsForMonth.filter { it.monthKey == monthKey }.associateBy { it.memberId }
+
+        viewModelScope.launch {
+            _isBusy.value = true
+            if (sendInApp) {
+                val sampleName = recipients.firstOrNull()?.name ?: "ممبر"
+                val notifBody = gateway.renderUrduMessage(
+                    type = type,
+                    memberName = sampleName,
+                    amount = committee.monthlyInstallment,
+                    date = winnerDate,
+                    remainingAmount = 0L,
+                    adminMessage = adminMessage,
+                    customTemplate = customBodyOrTemplate,
+                    settings = companySettings.value
+                )
+                val notifRes = repository.sendInAppNotifications(
+                    committeeId = committee.id,
+                    targetMembers = recipients,
+                    title = "${type.titleEn} • ${type.titleUr}",
+                    message = notifBody,
+                    type = type.notificationType,
+                    monthKey = monthKey,
+                    preventDuplicate = preventDuplicateInApp,
+                    actorName = actorName()
+                )
+                notifRes.onSuccess { (sentCount, skippedCount) ->
+                    if (!sendWhatsApp && !sendSms) {
+                        val suffix = if (skippedCount > 0) " ($skippedCount duplicate skipped)" else ""
+                        _snackbarEvents.tryEmit("Saved $sentCount in-app notification(s)$suffix.")
+                    }
+                }
+            }
+
+            if (sendWhatsApp || sendSms) {
+                val config = messagingConfig.value
+                recipients.forEachIndexed { idx, member ->
+                    val inst = byMember[member.id]
+                    val dueAmt = inst?.dueAmount ?: member.monthlyDue(committee.monthlyInstallment)
+                    val paidAmt = inst?.paidAmount ?: 0L
+                    val remainingAmt = inst?.remainingAmount ?: dueAmt
+                    val effectiveAmount = when (type) {
+                        UrduMessageType.PAYMENT_RECEIVED -> if (paidAmt > 0L) paidAmt else dueAmt
+                        UrduMessageType.PENDING_PAYMENT_REMINDER -> remainingAmt
+                        UrduMessageType.WINNER_ANNOUNCEMENT -> committee.eachPayoutAmount
+                        else -> dueAmt
+                    }
+                    val rendered = gateway.renderUrduMessage(
+                        type = type,
+                        memberName = member.name,
+                        amount = effectiveAmount,
+                        date = winnerDate.ifBlank { inst?.paymentDate ?: MonthUtils.todayDateString() },
+                        remainingAmount = remainingAmt,
+                        adminMessage = adminMessage,
+                        customTemplate = customBodyOrTemplate,
+                        settings = companySettings.value
+                    )
+                    if (sendWhatsApp) {
+                        if (config.isWhatsAppApiConfigured) {
+                            when (val apiRes = gateway.sendViaWhatsAppCloudApi(config, member.phone, rendered)) {
+                                is ApiSendResult.Success -> repository.logReminderDispatch(
+                                    committee.id, member, monthKey, ReminderChannel.WHATSAPP_API,
+                                    ReminderStage.CUSTOM, rendered, DispatchStatus.SENT_API
+                                )
+                                is ApiSendResult.Failure -> repository.logReminderDispatch(
+                                    committee.id, member, monthKey, ReminderChannel.WHATSAPP_API,
+                                    ReminderStage.CUSTOM, rendered, DispatchStatus.FAILED, apiRes.error
+                                )
+                            }
+                        } else if (idx == 0) {
+                            val opened = gateway.openWhatsAppManual(context, member.phone, rendered)
+                            repository.logReminderDispatch(
+                                committee.id, member, monthKey, ReminderChannel.WHATSAPP_MANUAL,
+                                ReminderStage.CUSTOM, rendered,
+                                if (opened) DispatchStatus.OPENED_APP else DispatchStatus.FAILED,
+                                if (opened) null else "WhatsApp app could not be opened"
+                            )
+                        }
+                    }
+                    if (sendSms) {
+                        if (config.isSmsGatewayConfigured) {
+                            when (val apiRes = gateway.sendViaSmsGateway(config, member.phone, rendered)) {
+                                is ApiSendResult.Success -> repository.logReminderDispatch(
+                                    committee.id, member, monthKey, ReminderChannel.SMS_API,
+                                    ReminderStage.CUSTOM, rendered, DispatchStatus.SENT_API
+                                )
+                                is ApiSendResult.Failure -> repository.logReminderDispatch(
+                                    committee.id, member, monthKey, ReminderChannel.SMS_API,
+                                    ReminderStage.CUSTOM, rendered, DispatchStatus.FAILED, apiRes.error
+                                )
+                            }
+                        } else if (idx == 0 && !sendWhatsApp) {
+                            val opened = gateway.openSmsManual(context, member.phone, rendered)
+                            repository.logReminderDispatch(
+                                committee.id, member, monthKey, ReminderChannel.SMS_MANUAL,
+                                ReminderStage.CUSTOM, rendered,
+                                if (opened) DispatchStatus.OPENED_APP else DispatchStatus.FAILED,
+                                if (opened) null else "SMS app could not be opened"
+                            )
+                        }
+                    }
+                }
+            }
+            _isBusy.value = false
+        }
+    }
+
+    fun markNotificationRead(notificationId: String) {
+        viewModelScope.launch {
+            repository.markNotificationRead(notificationId)
+        }
+    }
+
+    fun markAllMemberNotificationsRead() {
+        val m = memberSession.value ?: return
+        viewModelScope.launch {
+            repository.markAllNotificationsReadForMember(m.id)
+        }
+    }
+
     // -------------------------------------------------------------------------
-    // PDF View, Share, Print, Download & JSON Backup
+    // PDF & Excel View, Share, Print, Download & JSON Backup
     // -------------------------------------------------------------------------
 
     fun generateAndOpenPdf(
@@ -1319,7 +1680,9 @@ class CommitteeViewModel(
                 selectedMonthKey = _selectedMonthKey.value,
                 selectedMember = selectedMember,
                 summary = dashboardSummary.value,
-                companySettings = companySettings.value
+                companySettings = companySettings.value,
+                forwardOrganizers = forwardOrganizersState.value,
+                forwardPayments = forwardPaymentsState.value
             )
             _isBusy.value = false
             res.onSuccess { file: File ->
@@ -1363,7 +1726,9 @@ class CommitteeViewModel(
                 selectedMonthKey = _selectedMonthKey.value,
                 selectedMember = selectedMember,
                 summary = dashboardSummary.value,
-                companySettings = companySettings.value
+                companySettings = companySettings.value,
+                forwardOrganizers = forwardOrganizersState.value,
+                forwardPayments = forwardPaymentsState.value
             )
             _isBusy.value = false
             res.onSuccess { file ->
@@ -1406,7 +1771,9 @@ class CommitteeViewModel(
                 selectedMonthKey = _selectedMonthKey.value,
                 selectedMember = selectedMember,
                 summary = dashboardSummary.value,
-                companySettings = companySettings.value
+                companySettings = companySettings.value,
+                forwardOrganizers = forwardOrganizersState.value,
+                forwardPayments = forwardPaymentsState.value
             )
             _isBusy.value = false
             res.onSuccess(onReady)
@@ -1420,6 +1787,275 @@ class CommitteeViewModel(
                 .onSuccess { _snackbarEvents.tryEmit("PDF downloaded successfully.") }
                 .onFailure { _snackbarEvents.tryEmit("Download failed: ${it.localizedMessage}") }
         }
+    }
+
+    fun generateAndHandleReceiptPdf(
+        context: Context,
+        installment: InstallmentRecord,
+        member: CommitteeMember?,
+        printMode: Boolean = false,
+        shareMode: Boolean = false,
+        onReadyForSave: ((File) -> Unit)? = null
+    ) {
+        val committee = activeCommittee.value ?: memberCommittee.value
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = PdfReportGenerator.generatePaymentReceiptPdf(
+                context = context,
+                committee = committee,
+                member = member,
+                installment = installment,
+                companySettings = companySettings.value
+            )
+            _isBusy.value = false
+            res.onSuccess { file ->
+                when {
+                    onReadyForSave != null -> onReadyForSave(file)
+                    printMode -> PdfReportGenerator.printPdf(
+                        context, file, "G M S R HASHMANI THAR Receipt - ${installment.memberName}"
+                    ).onFailure { _snackbarEvents.tryEmit(it.localizedMessage ?: "Print failed.") }
+                    else -> {
+                        val opened = PdfReportGenerator.openOrSharePdf(context, file, shareMode)
+                        if (!opened) _snackbarEvents.tryEmit("Receipt created (${file.name}). Use Download or Print.")
+                    }
+                }
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to create receipt PDF.")
+            }
+        }
+    }
+
+    fun saveExcelToUri(
+        context: Context,
+        reportType: PdfReportType,
+        selectedMember: CommitteeMember?,
+        targetUri: Uri
+    ) {
+        val committee = activeCommittee.value
+        val allCommittees = (committeesState.value as? UiState.Success)?.data ?: emptyList()
+        val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
+        viewModelScope.launch {
+            _isBusy.value = true
+            val ok = FinancialReportExporter.writeExcelToUri(
+                context = context,
+                uri = targetUri,
+                reportType = reportType,
+                committee = committee,
+                allCommittees = allCommittees,
+                members = members,
+                installments = installments,
+                turns = turnsState.value,
+                oldRecords = oldRecords.value,
+                selectedMonthKey = _selectedMonthKey.value,
+                selectedMember = selectedMember,
+                companySettings = companySettings.value,
+                forwardOrganizers = forwardOrganizersState.value,
+                forwardPayments = forwardPaymentsState.value
+            )
+            _isBusy.value = false
+            _snackbarEvents.tryEmit(if (ok) "Excel report downloaded successfully." else "Failed to write Excel file.")
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Forward Committee Organizers & Forward Payment Tracking
+    // -------------------------------------------------------------------------
+
+    fun saveForwardOrganizer(
+        existingId: String?,
+        organizerName: String,
+        organizerPhone: String,
+        totalPayableAmount: Long,
+        monthKey: String,
+        notes: String?
+    ) {
+        val cid = activeCommittee.value?.id ?: run {
+            _snackbarEvents.tryEmit("Create or select a committee first.")
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.saveForwardOrganizer(
+                organizerId = existingId,
+                committeeId = cid,
+                organizerName = organizerName,
+                organizerPhone = organizerPhone,
+                totalPayableAmount = totalPayableAmount,
+                monthKey = monthKey,
+                notes = notes,
+                actorName = actorName()
+            )
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Saved organizer ${it.organizerName}.")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to save organizer.")
+            }
+        }
+    }
+
+    fun deleteForwardOrganizer(
+        organizerId: String,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val authRes = repository.verifyAdminAccess(currentUser.value, adminPassword)
+            if (authRes.isFailure) {
+                _isBusy.value = false
+                val err = authRes.exceptionOrNull()?.localizedMessage ?: "Admin PIN verification failed."
+                _snackbarEvents.tryEmit(err)
+                onResult(false, err)
+                return@launch
+            }
+            val res = repository.deleteForwardOrganizerSafely(organizerId, actorName())
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Organizer removed.")
+                onResult(true, null)
+            }.onFailure {
+                val msg = it.localizedMessage ?: "Cannot remove organizer."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    fun recordForwardPayment(
+        existingPaymentId: String?,
+        organizerId: String,
+        monthKey: String,
+        amountForwarded: Long,
+        paymentDate: String,
+        paymentMethod: PaymentMethod,
+        transactionId: String?,
+        proofUri: String?,
+        proofLabel: String?,
+        notes: String?,
+        confirmedByAdmin: Boolean
+    ) {
+        val cid = activeCommittee.value?.id ?: run {
+            _snackbarEvents.tryEmit("Create or select a committee first.")
+            return
+        }
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.recordForwardPayment(
+                paymentId = existingPaymentId,
+                committeeId = cid,
+                organizerId = organizerId,
+                monthKey = monthKey,
+                amountForwarded = amountForwarded,
+                paymentDate = paymentDate,
+                paymentMethod = paymentMethod,
+                transactionId = transactionId,
+                proofUri = proofUri,
+                proofLabel = proofLabel,
+                notes = notes,
+                confirmedByAdmin = confirmedByAdmin,
+                actorName = actorName()
+            )
+            _isBusy.value = false
+            res.onSuccess { rec ->
+                _snackbarEvents.tryEmit("Forward payment recorded (${rec.receiptNumber}).")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to record forward payment.")
+            }
+        }
+    }
+
+    fun reverseForwardPayment(paymentId: String, reason: String) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.reverseForwardPayment(paymentId, reason, actorName())
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Forward payment reversed and saved to audit log.")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Could not reverse forward payment.")
+            }
+        }
+    }
+
+    fun deleteForwardPayment(
+        paymentId: String,
+        adminPassword: String,
+        onResult: (Boolean, String?) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val authRes = repository.verifyAdminAccess(currentUser.value, adminPassword)
+            if (authRes.isFailure) {
+                _isBusy.value = false
+                val err = authRes.exceptionOrNull()?.localizedMessage ?: "Admin PIN verification failed."
+                _snackbarEvents.tryEmit(err)
+                onResult(false, err)
+                return@launch
+            }
+            val res = repository.deleteForwardPaymentSafely(paymentId, actorName())
+            _isBusy.value = false
+            res.onSuccess {
+                _snackbarEvents.tryEmit("Forward payment entry deleted.")
+                onResult(true, null)
+            }.onFailure {
+                val msg = it.localizedMessage ?: "Cannot delete forward payment."
+                _snackbarEvents.tryEmit(msg)
+                onResult(false, msg)
+            }
+        }
+    }
+
+    fun importProofFile(
+        context: Context,
+        uri: Uri,
+        onSuccess: (localPath: String, label: String) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isBusy.value = true
+            val res = repository.copyProofUriToInternalStorage(context, uri)
+            _isBusy.value = false
+            res.onSuccess { (path, label) ->
+                onSuccess(path, label)
+                _snackbarEvents.tryEmit("Attached proof: $label")
+            }.onFailure {
+                _snackbarEvents.tryEmit(it.localizedMessage ?: "Failed to attach proof file.")
+            }
+        }
+    }
+
+    fun buildOrganizerUrduSummary(organizerName: String, isMonthlyScope: Boolean): String {
+        val committee = activeCommittee.value
+        val members = (membersState.value as? UiState.Success)?.data ?: emptyList()
+        val installments = (installmentsState.value as? UiState.Success)?.data ?: emptyList()
+        val monthKey = _selectedMonthKey.value
+        val scopedInstallments = if (isMonthlyScope) {
+            installments.filter { it.monthKey == monthKey }
+        } else {
+            installments
+        }
+        val summary = if (isMonthlyScope) {
+            forwardMonthlySummary.value
+        } else {
+            forwardOverallSummary.value
+        } ?: ForwardFinancialCalculator.compute(
+            committee = committee,
+            members = members,
+            installments = installments,
+            organizers = forwardOrganizersState.value,
+            forwardPayments = forwardPaymentsState.value,
+            monthKey = if (isMonthlyScope) monthKey else null
+        )
+
+        return gateway.buildOrganizerUrduSummaryMessage(
+            committeeName = committee?.name ?: companySettings.value.companyName,
+            organizerName = organizerName,
+            summary = summary,
+            members = members,
+            scopedInstallments = scopedInstallments,
+            settings = companySettings.value
+        )
     }
 
     suspend fun exportBackupJson(): Result<String> {
@@ -1452,6 +2088,14 @@ class CommitteeViewModel(
         val members: UiState<List<CommitteeMember>>,
         val installments: UiState<List<InstallmentRecord>>,
         val turns: List<CommitteeTurn>
+    )
+
+    private data class ForwardCalcInputs(
+        val committee: Committee?,
+        val members: List<CommitteeMember>,
+        val installments: List<InstallmentRecord>,
+        val organizers: List<ForwardOrganizer>,
+        val payments: List<ForwardPaymentRecord>
     )
 
     private companion object {

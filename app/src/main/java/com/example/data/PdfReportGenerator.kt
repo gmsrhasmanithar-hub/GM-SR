@@ -24,6 +24,9 @@ import com.example.model.CommitteeStatus
 import com.example.model.CommitteeTurn
 import com.example.model.DashboardSummary
 import com.example.model.FormatUtils
+import com.example.model.ForwardFinancialCalculator
+import com.example.model.ForwardOrganizer
+import com.example.model.ForwardPaymentRecord
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
@@ -39,6 +42,7 @@ import java.util.Date
 import java.util.Locale
 
 enum class PdfReportType {
+    DAILY_COLLECTION,
     INDIVIDUAL_MEMBER,
     COMPLETE_MEMBER_LIST,
     MONTHLY_COLLECTION,
@@ -47,7 +51,8 @@ enum class PdfReportType {
     INDIVIDUAL_COMMITTEE,
     COMMITTEE_PAYOUT_REPORT,
     PREVIOUS_COMMITTEE_HISTORY,
-    COMPLETE_FINANCIAL_SUMMARY
+    COMPLETE_FINANCIAL_SUMMARY,
+    FORWARD_PAYMENTS_SUMMARY
 }
 
 object PdfReportGenerator {
@@ -67,13 +72,15 @@ object PdfReportGenerator {
         selectedMonthKey: String = MonthUtils.currentMonthKey(),
         selectedMember: CommitteeMember? = null,
         summary: DashboardSummary? = null,
-        companySettings: AppCompanySettings = AppCompanySettings()
+        companySettings: AppCompanySettings = AppCompanySettings(),
+        forwardOrganizers: List<ForwardOrganizer> = emptyList(),
+        forwardPayments: List<ForwardPaymentRecord> = emptyList()
     ): Result<File> {
         val doc = PdfDocument()
         return try {
             val dir = File(context.cacheDir, "reports").apply { mkdirs() }
             val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            val fileName = "GM_HASMANI_${reportType.name}_$stamp.pdf"
+            val fileName = "GMSR_HASHMANI_${reportType.name}_$stamp.pdf"
             val outFile = File(dir, fileName)
 
             val headerCommitteeLabel = when (reportType) {
@@ -87,6 +94,8 @@ object PdfReportGenerator {
             val cur = companySettings.currency
 
             when (reportType) {
+                PdfReportType.DAILY_COLLECTION ->
+                    writeDailyCollectionReport(writer, installments, cur)
                 PdfReportType.INDIVIDUAL_MEMBER ->
                     writeIndividualMemberReport(writer, committee, selectedMember, installments, turns, cur)
                 PdfReportType.COMPLETE_MEMBER_LIST ->
@@ -105,9 +114,132 @@ object PdfReportGenerator {
                     writePreviousCommitteeHistory(writer, oldRecords)
                 PdfReportType.COMPLETE_FINANCIAL_SUMMARY ->
                     writeCompleteFinancialSummary(writer, committee, allCommittees, members, installments, turns, oldRecords, summary, cur)
+                PdfReportType.FORWARD_PAYMENTS_SUMMARY ->
+                    writeForwardPaymentsSummary(
+                        writer, committee, members, installments, forwardOrganizers, forwardPayments, selectedMonthKey, cur
+                    )
             }
 
             writer.finish()
+            FileOutputStream(outFile).use { fos -> doc.writeTo(fos) }
+            Result.success(outFile)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            runCatching { doc.close() }
+        }
+    }
+
+    fun generatePaymentReceiptPdf(
+        context: Context,
+        committee: Committee?,
+        member: CommitteeMember?,
+        installment: InstallmentRecord,
+        companySettings: AppCompanySettings = AppCompanySettings()
+    ): Result<File> {
+        val doc = PdfDocument()
+        return try {
+            val dir = File(context.cacheDir, "reports").apply { mkdirs() }
+            val safeReceipt = (installment.receiptNumber ?: "GMSR_${installment.monthKey}")
+                .replace(Regex("[^a-zA-Z0-9_\\-]"), "_")
+            val outFile = File(dir, "Receipt_${safeReceipt}_${System.currentTimeMillis()}.pdf")
+
+            val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, 520, 1).create()
+            val page = doc.startPage(pageInfo)
+            val c = page.canvas
+
+            val headerPaint = Paint().apply { color = Color.rgb(11, 110, 79) }
+            val goldPaint = Paint().apply { color = Color.rgb(197, 155, 39) }
+            val titlePaint = Paint().apply {
+                color = Color.WHITE
+                textSize = 16f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                isAntiAlias = true
+            }
+            val subPaint = Paint().apply {
+                color = Color.rgb(235, 248, 242)
+                textSize = 10.5f
+                isAntiAlias = true
+            }
+            val labelPaint = Paint().apply {
+                color = Color.rgb(80, 95, 88)
+                textSize = 10f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                isAntiAlias = true
+            }
+            val valPaint = Paint().apply {
+                color = Color.rgb(16, 32, 26)
+                textSize = 11f
+                isAntiAlias = true
+            }
+            val amtPaint = Paint().apply {
+                color = Color.rgb(11, 110, 79)
+                textSize = 16f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                isAntiAlias = true
+            }
+            val boxPaint = Paint().apply {
+                color = Color.rgb(243, 249, 246)
+                style = Paint.Style.FILL
+            }
+            val borderPaint = Paint().apply {
+                color = Color.rgb(180, 205, 195)
+                style = Paint.Style.STROKE
+                strokeWidth = 1.2f
+            }
+
+            c.drawRect(0f, 0f, PAGE_WIDTH.toFloat(), 72f, headerPaint)
+            c.drawRect(0f, 72f, PAGE_WIDTH.toFloat(), 76f, goldPaint)
+            c.drawText(companySettings.companyName.ifBlank { "G M S R HASHMANI THAR" }, MARGIN, 30f, titlePaint)
+            c.drawText(
+                "OFFICIAL PAYMENT RECEIPT  |  ادائیگی کی رسید  •  Contact: ${companySettings.adminContactNumber.ifBlank { "03423498631" }}",
+                MARGIN,
+                52f,
+                subPaint
+            )
+
+            c.drawRect(MARGIN, 92f, PAGE_WIDTH - MARGIN, 430f, boxPaint)
+            c.drawRect(MARGIN, 92f, PAGE_WIDTH - MARGIN, 430f, borderPaint)
+
+            val receiptNo = installment.receiptNumber?.takeIf { it.isNotBlank() } ?: "GMSR-${installment.monthKey}"
+            val memberIdStr = member?.displayMemberId ?: "GM-${installment.committeeNumber.toString().padStart(3, '0')}"
+            val sharesStr = member?.let { FormatUtils.formatShares(it.effectiveShares) } ?: "1"
+            val rows = listOf(
+                "Receipt No / رسید نمبر:" to receiptNo,
+                "Committee / کمیٹی:" to (committee?.name ?: companySettings.companyName),
+                "Member Name / ممبر کا نام:" to installment.memberName,
+                "Member ID / ممبر آئی ڈی:" to "$memberIdStr (#${installment.committeeNumber})",
+                "Shares / حصص:" to "$sharesStr Share(s)",
+                "Month / مہینہ:" to "M${installment.monthIndex} • ${MonthUtils.formatMonthDisplay(installment.monthKey)}",
+                "Payment Date / تاریخ ادائیگی:" to (installment.paymentDate ?: MonthUtils.todayDateString()),
+                "Payment Method / طریقہ کار:" to "${installment.paymentMethodEnum.label}" +
+                    (installment.transactionId?.let { " ($it)" } ?: ""),
+                "Status / صورتحال:" to installment.status,
+                "Remaining / بقایا رقم:" to FormatUtils.formatMoney(installment.remainingAmount, companySettings.currency),
+                "Admin Name / ایڈمن:" to companySettings.adminName.ifBlank { "G M S R HASHMANI THAR Admin" },
+                "Official Contact / رابطہ:" to companySettings.adminContactNumber.ifBlank { "03423498631" }
+            )
+
+            var yPos = 118f
+            rows.forEach { (k, v) ->
+                c.drawText(k, MARGIN + 14f, yPos, labelPaint)
+                c.drawText(v, MARGIN + 210f, yPos, valPaint)
+                yPos += 21f
+            }
+
+            c.drawLine(MARGIN + 14f, yPos + 4f, PAGE_WIDTH - MARGIN - 14f, yPos + 4f, borderPaint)
+            c.drawText("AMOUNT PAID / وصول شدہ رقم:", MARGIN + 14f, yPos + 28f, labelPaint)
+            c.drawText(FormatUtils.formatMoney(installment.paidAmount, companySettings.currency), MARGIN + 210f, yPos + 30f, amtPaint)
+
+            // Signature area
+            val sigY = 472f
+            c.drawLine(MARGIN + 10f, sigY, MARGIN + 190f, sigY, borderPaint)
+            c.drawText("Member Signature", MARGIN + 10f, sigY + 14f, labelPaint)
+
+            c.drawLine(PAGE_WIDTH - MARGIN - 190f, sigY, PAGE_WIDTH - MARGIN - 10f, sigY, borderPaint)
+            c.drawText("Authorized Admin Signature", PAGE_WIDTH - MARGIN - 190f, sigY + 14f, labelPaint)
+
+            doc.finishPage(page)
             FileOutputStream(outFile).use { fos -> doc.writeTo(fos) }
             Result.success(outFile)
         } catch (e: Exception) {
@@ -123,7 +255,7 @@ object PdfReportGenerator {
             Intent(Intent.ACTION_SEND).apply {
                 type = "application/pdf"
                 putExtra(Intent.EXTRA_STREAM, uri)
-                putExtra(Intent.EXTRA_SUBJECT, "GM HASMANI Committee Report - ${file.name}")
+                putExtra(Intent.EXTRA_SUBJECT, "G M S R HASHMANI THAR Report - ${file.name}")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
         } else {
@@ -134,7 +266,7 @@ object PdfReportGenerator {
         }
         return try {
             val chooser = if (shareMode) {
-                Intent.createChooser(intent, "Share GM HASMANI PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                Intent.createChooser(intent, "Share G M S R HASHMANI THAR PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             } else {
                 intent
             }
@@ -216,6 +348,7 @@ object PdfReportGenerator {
     }
 
     private fun reportSubtitle(type: PdfReportType, monthKey: String, member: CommitteeMember?): String = when (type) {
+        PdfReportType.DAILY_COLLECTION -> "Daily Collection Report • ${MonthUtils.todayDateString()}"
         PdfReportType.INDIVIDUAL_MEMBER -> "Individual Member Report • ${member?.name ?: "Member"}"
         PdfReportType.COMPLETE_MEMBER_LIST -> "Complete Member List"
         PdfReportType.MONTHLY_COLLECTION -> "Monthly Collection Report • ${MonthUtils.formatMonthDisplay(monthKey)}"
@@ -225,6 +358,41 @@ object PdfReportGenerator {
         PdfReportType.COMMITTEE_PAYOUT_REPORT -> "Committee Payout Turns Report"
         PdfReportType.PREVIOUS_COMMITTEE_HISTORY -> "Previous Committee History"
         PdfReportType.COMPLETE_FINANCIAL_SUMMARY -> "Complete Financial Summary"
+        PdfReportType.FORWARD_PAYMENTS_SUMMARY -> "Collection & Forward Payments Summary"
+    }
+
+    private fun writeDailyCollectionReport(
+        writer: PdfPageWriter,
+        installments: List<InstallmentRecord>,
+        cur: String
+    ) {
+        val today = MonthUtils.todayDateString()
+        val todayPaid = installments.filter { it.paymentDate == today && it.paidAmount > 0L }.sortedBy { it.committeeNumber }
+        val sum = todayPaid.sumOf { it.paidAmount }
+        writer.drawInfoBox(
+            listOf(
+                "Daily Collection Date: $today | Payments Recorded Today: ${todayPaid.size}",
+                "Total Collected Today: ${FormatUtils.formatMoney(sum, cur)} | Contact: 03423498631"
+            )
+        )
+        if (todayPaid.isEmpty()) {
+            writer.drawInfoBox(listOf("No payments recorded on $today."))
+            return
+        }
+        writer.drawTableHeader(listOf("Receipt" to 85f, "Member Name" to 150f, "Month" to 80f, "Amount" to 85f, "Method" to 70f, "Status" to 53f))
+        todayPaid.forEach { rec ->
+            writer.drawTableRow(
+                listOf(
+                    (rec.receiptNumber ?: "-") to 85f,
+                    rec.memberName to 150f,
+                    MonthUtils.formatMonthDisplay(rec.monthKey) to 80f,
+                    FormatUtils.formatMoney(rec.paidAmount, cur) to 85f,
+                    rec.paymentMethodEnum.label to 70f,
+                    rec.status to 53f
+                ),
+                statusColor = Color.rgb(22, 163, 74)
+            )
+        }
     }
 
     private fun writeIndividualMemberReport(
@@ -618,10 +786,101 @@ object PdfReportGenerator {
         }
     }
 
+    private fun writeForwardPaymentsSummary(
+        writer: PdfPageWriter,
+        committee: Committee?,
+        members: List<CommitteeMember>,
+        installments: List<InstallmentRecord>,
+        organizers: List<ForwardOrganizer>,
+        forwardPayments: List<ForwardPaymentRecord>,
+        selectedMonthKey: String,
+        cur: String
+    ) {
+        val overall = ForwardFinancialCalculator.compute(
+            committee = committee,
+            members = members,
+            installments = installments,
+            organizers = organizers,
+            forwardPayments = forwardPayments,
+            monthKey = null
+        )
+        val monthly = ForwardFinancialCalculator.compute(
+            committee = committee,
+            members = members,
+            installments = installments,
+            organizers = organizers,
+            forwardPayments = forwardPayments,
+            monthKey = selectedMonthKey
+        )
+
+        writer.drawInfoBox(
+            listOf(
+                "SELECTED MONTH (${MonthUtils.formatMonthDisplay(selectedMonthKey)})",
+                "Expected: ${FormatUtils.formatMoney(monthly.expectedFromMembers, cur)} | Collected: ${FormatUtils.formatMoney(monthly.collectedFromMembers, cur)} | Pending Collection: ${FormatUtils.formatMoney(monthly.pendingMemberCollection, cur)}",
+                "Forward Payable: ${FormatUtils.formatMoney(monthly.forwardPaymentDue, cur)} | Forwarded: ${FormatUtils.formatMoney(monthly.totalForwarded, cur)} | Held by Admin: ${FormatUtils.formatMoney(monthly.amountCurrentlyHeldByAdmin, cur)}"
+            )
+        )
+        writer.drawInfoBox(
+            listOf(
+                "OVERALL COMMITTEE RECONCILIATION",
+                "Expected: ${FormatUtils.formatMoney(overall.expectedFromMembers, cur)} | Received: ${FormatUtils.formatMoney(overall.collectedFromMembers, cur)} | Not Yet Received: ${FormatUtils.formatMoney(overall.pendingMemberCollection, cur)}",
+                "Forwarded to Organizers: ${FormatUtils.formatMoney(overall.totalForwarded, cur)} | Pending Forward: ${FormatUtils.formatMoney(overall.pendingForwardPayment, cur)} | Held by Admin: ${FormatUtils.formatMoney(overall.amountCurrentlyHeldByAdmin, cur)}"
+            )
+        )
+
+        if (overall.organizerBreakdowns.isNotEmpty()) {
+            writer.drawSectionHeading("COMMITTEE ORGANIZERS / RECIPIENTS")
+            writer.drawTableHeader(listOf("Organizer" to 135f, "Mobile" to 90f, "Month" to 65f, "Payable" to 80f, "Forwarded" to 80f, "Remaining" to 73f))
+            overall.organizerBreakdowns.forEach { b ->
+                writer.drawTableRow(
+                    listOf(
+                        b.organizer.organizerName to 135f,
+                        b.organizer.organizerPhone to 90f,
+                        (b.organizer.monthKey.takeIf { it.isNotBlank() }?.let { MonthUtils.formatMonthDisplay(it) } ?: "All") to 65f,
+                        FormatUtils.formatCompactNumber(b.organizer.totalPayableAmount) to 80f,
+                        FormatUtils.formatCompactNumber(b.forwardedAmount) to 80f,
+                        FormatUtils.formatCompactNumber(b.remainingAmount) to 73f
+                    ),
+                    statusColor = if (b.remainingAmount == 0L && b.forwardedAmount > 0L) Color.rgb(22, 163, 74) else Color.rgb(217, 119, 6)
+                )
+            }
+        }
+
+        writer.drawSectionHeading("FORWARD PAYMENT HISTORY (${forwardPayments.size})")
+        if (forwardPayments.isEmpty()) {
+            writer.drawInfoBox(listOf("No forward payments recorded yet."))
+            return
+        }
+        writer.drawTableHeader(listOf("Receipt" to 88f, "Recipient" to 120f, "Date" to 72f, "Method" to 68f, "Amount" to 85f, "Status" to 90f))
+        forwardPayments.forEach { p ->
+            val statusStr = when {
+                p.isReversed -> "REVERSED"
+                p.confirmedByAdmin -> if (!p.proofUri.isNullOrBlank()) "CONFIRMED+PROOF" else "CONFIRMED"
+                else -> "UNCONFIRMED"
+            }
+            writer.drawTableRow(
+                listOf(
+                    (p.receiptNumber ?: "-") to 88f,
+                    p.organizerName to 120f,
+                    p.paymentDate to 72f,
+                    p.paymentMethodEnum.label to 68f,
+                    FormatUtils.formatMoney(p.amountForwarded, cur) to 85f,
+                    statusStr to 90f
+                ),
+                statusColor = when {
+                    p.isReversed -> Color.rgb(220, 38, 38)
+                    p.confirmedByAdmin -> Color.rgb(22, 163, 74)
+                    else -> Color.rgb(217, 119, 6)
+                }
+            )
+        }
+    }
+
     private fun colorForInstallment(status: InstallmentStatus): Int = when (status) {
         InstallmentStatus.PAID -> Color.rgb(22, 163, 74)
         InstallmentStatus.UNPAID -> Color.rgb(220, 38, 38)
         InstallmentStatus.PARTIAL -> Color.rgb(217, 119, 6)
+        InstallmentStatus.OVERDUE -> Color.rgb(185, 28, 28)
     }
 
     private class PdfPageWriter(
@@ -683,8 +942,8 @@ object PdfReportGenerator {
 
             c.drawRect(0f, 0f, PAGE_WIDTH.toFloat(), 66f, headerBgPaint)
             c.drawRect(0f, 66f, PAGE_WIDTH.toFloat(), 70f, goldStripPaint)
-            c.drawText(companySettings.companyName.uppercase(Locale.US), MARGIN, 28f, brandPaint)
-            c.drawText("$committeeName  •  $subtitle", MARGIN, 48f, subtitlePaint)
+            c.drawText(companySettings.companyName.ifBlank { "G M S R HASHMANI THAR" }, MARGIN, 28f, brandPaint)
+            c.drawText("$committeeName  •  $subtitle  •  03423498631", MARGIN, 48f, subtitlePaint)
             y = 88f
         }
 

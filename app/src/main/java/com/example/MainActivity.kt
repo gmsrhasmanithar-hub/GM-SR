@@ -32,9 +32,11 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ListAlt
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.Dashboard
+import androidx.compose.material.icons.rounded.ForwardToInbox
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Refresh
@@ -62,12 +64,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -102,6 +107,9 @@ import com.example.model.BackupUtils
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeTurn
+import com.example.model.FormatUtils
+import com.example.model.ForwardOrganizer
+import com.example.model.ForwardPaymentRecord
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
@@ -111,29 +119,40 @@ import com.example.model.PaymentMethod
 import com.example.model.PayoutStatus
 import com.example.model.ReminderStage
 import com.example.model.UploadQueueStatus
+import com.example.model.UrduMessageType
 import com.example.ui.components.AddManualPaymentDialog
 import com.example.ui.components.AdminDeleteConfirmDialog
 import com.example.ui.components.AppSettingsDialog
+import com.example.ui.components.BackupRestoreQuickDialog
 import com.example.ui.components.ChangePasswordDialog
 import com.example.ui.components.CommitteeDetailDialog
 import com.example.ui.components.CommitteeEditorDialog
 import com.example.ui.components.CommitteeSwitcherDialog
+import com.example.ui.components.DashboardListDetailDialog
+import com.example.ui.components.ForwardOrganizerEditorDialog
+import com.example.ui.components.InAppNotificationsDialog
 import com.example.ui.components.MemberDetailDialog
 import com.example.ui.components.MemberEditorDialog
 import com.example.ui.components.MessagingGatewayConfigDialog
 import com.example.ui.components.OldCommitteeRecordDetailDialog
 import com.example.ui.components.OldCommitteeRecordEditorDialog
+import com.example.ui.components.OrganizerUrduSummaryDialog
 import com.example.ui.components.PaymentActivityHistoryDialog
+import com.example.ui.components.PaymentReceiptDialog
+import com.example.ui.components.RecordForwardPaymentDialog
 import com.example.ui.components.RecordPaymentDialog
 import com.example.ui.components.RecordPayoutDialog
+import com.example.ui.components.ReverseForwardPaymentDialog
 import com.example.ui.components.TurnEditorDialog
 import com.example.ui.components.UploadQueueDialog
 import com.example.ui.components.UserManagementDialog
 import com.example.ui.screens.CommitteeTurnsScreen
 import com.example.ui.screens.CommitteesScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.ForwardPaymentsScreen
 import com.example.ui.screens.HistoryReportsSettingsScreen
 import com.example.ui.screens.InstallmentsScreen
+import com.example.ui.screens.MemberPortalScreen
 import com.example.ui.screens.MembersScreen
 import com.example.ui.screens.OldHistoryScreen
 import com.example.ui.screens.PdfReportsScreen
@@ -141,6 +160,7 @@ import com.example.ui.screens.RemindersScreen
 import com.example.ui.theme.CommitteeManagerTheme
 import com.example.ui.theme.StatusUnpaidRed
 import com.example.viewmodel.CommitteeViewModel
+import com.example.viewmodel.InstallmentFilter
 import com.example.viewmodel.UiState
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -151,6 +171,7 @@ enum class AppSection(val icon: ImageVector, val testTag: String) {
     COMMITTEES(Icons.Rounded.AccountBalance, "nav_committees"),
     MEMBERS(Icons.Rounded.Group, "nav_members"),
     PAYMENTS(Icons.Rounded.Payments, "nav_installments"),
+    FORWARD_PAYMENTS(Icons.Rounded.ForwardToInbox, "nav_forward_payments"),
     COMMITTEE_TURNS(Icons.AutoMirrored.Rounded.ListAlt, "nav_turns"),
     MESSAGE_REQUESTS(Icons.Rounded.Sms, "nav_reminders"),
     PDF_REPORTS(Icons.Rounded.PictureAsPdf, "nav_pdf_reports"),
@@ -158,11 +179,17 @@ enum class AppSection(val icon: ImageVector, val testTag: String) {
     SETTINGS(Icons.Rounded.Settings, "nav_settings")
 }
 
+private enum class DashboardModalType {
+    PAID_MEMBERS,
+    UNPAID_MEMBERS,
+    UPCOMING_COMMITTEE
+}
+
 private val BOTTOM_BAR_SECTIONS = listOf(
     AppSection.DASHBOARD,
-    AppSection.COMMITTEES,
+    AppSection.MEMBERS,
     AppSection.PAYMENTS,
-    AppSection.COMMITTEE_TURNS,
+    AppSection.MESSAGE_REQUESTS,
     AppSection.SETTINGS
 )
 
@@ -173,6 +200,9 @@ private sealed interface PendingDeleteTarget {
     data class UnpaidMonthTarget(val monthKey: String) : PendingDeleteTarget
     data class TurnTarget(val turn: CommitteeTurn) : PendingDeleteTarget
     data class OldRecordTarget(val record: OldCommitteeRecord) : PendingDeleteTarget
+    data class ForwardOrganizerTarget(val organizer: ForwardOrganizer) : PendingDeleteTarget
+    data class ForwardPaymentTarget(val payment: ForwardPaymentRecord) : PendingDeleteTarget
+    data object ResetAllAppDataTarget : PendingDeleteTarget
 }
 
 class MainActivity : ComponentActivity() {
@@ -238,6 +268,17 @@ fun MainFeatureShell(
     val completedUploads by viewModel.completedUploads.collectAsStateWithLifecycle()
     val failedUploads by viewModel.failedUploads.collectAsStateWithLifecycle()
 
+    val memberSession by viewModel.memberSession.collectAsStateWithLifecycle()
+    val memberNotifications by viewModel.memberNotifications.collectAsStateWithLifecycle()
+    val memberCommittee by viewModel.memberCommittee.collectAsStateWithLifecycle()
+    val memberInstallments by viewModel.memberInstallments.collectAsStateWithLifecycle()
+    val memberTurns by viewModel.memberTurns.collectAsStateWithLifecycle()
+    val allNotifications by viewModel.allNotifications.collectAsStateWithLifecycle()
+    val forwardOrganizers by viewModel.forwardOrganizersState.collectAsStateWithLifecycle()
+    val forwardPayments by viewModel.forwardPaymentsState.collectAsStateWithLifecycle()
+    val forwardMonthlySummary by viewModel.forwardMonthlySummary.collectAsStateWithLifecycle()
+    val forwardOverallSummary by viewModel.forwardOverallSummary.collectAsStateWithLifecycle()
+
     val effectiveLang = when (gatewayConfig.localLanguageCode) {
         "ur" -> AppLanguage.UR
         else -> initialLanguage
@@ -252,7 +293,7 @@ fun MainFeatureShell(
     }
 
     var currentSection by rememberSaveable { mutableStateOf(AppSection.DASHBOARD) }
-    if (currentSection != AppSection.DASHBOARD && !isLoggedOut) {
+    if (currentSection != AppSection.DASHBOARD && !isLoggedOut && memberSession == null) {
         BackHandler { currentSection = AppSection.DASHBOARD }
     }
 
@@ -277,6 +318,17 @@ fun MainFeatureShell(
     var pendingRestoreData by remember { mutableStateOf<Pair<String, BackupPreview>?>(null) }
     var pendingDeleteTarget by remember { mutableStateOf<PendingDeleteTarget?>(null) }
     var deleteErrorMsg by remember { mutableStateOf<String?>(null) }
+    var receiptTarget by remember { mutableStateOf<Pair<InstallmentRecord, CommitteeMember?>?>(null) }
+    var dashboardModalType by remember { mutableStateOf<DashboardModalType?>(null) }
+    var showBackupRestoreQuick by remember { mutableStateOf(false) }
+    var showNotificationsInbox by remember { mutableStateOf(false) }
+    var showForwardOrganizerDialog by remember { mutableStateOf(false) }
+    var forwardOrganizerToEdit by remember { mutableStateOf<ForwardOrganizer?>(null) }
+    var showRecordForwardDialog by remember { mutableStateOf(false) }
+    var forwardPaymentToEdit by remember { mutableStateOf<ForwardPaymentRecord?>(null) }
+    var initialForwardOrganizerId by remember { mutableStateOf<String?>(null) }
+    var forwardPaymentToReverse by remember { mutableStateOf<ForwardPaymentRecord?>(null) }
+    var organizerSummaryTarget by remember { mutableStateOf<Pair<ForwardOrganizer?, String>?>(null) }
 
     // Simple Settings dialogs
     var showAppSettings by remember { mutableStateOf(false) }
@@ -302,6 +354,24 @@ fun MainFeatureShell(
             pendingPdfFile = generatedFile
             downloadPdfLauncher.launch(generatedFile.name)
         }
+    }
+
+    // SAF Excel (.xls) Export launcher
+    var pendingExcelExport by remember { mutableStateOf<Pair<PdfReportType, CommitteeMember?>?>(null) }
+    val downloadExcelLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/vnd.ms-excel")
+    ) { uri ->
+        val req = pendingExcelExport
+        pendingExcelExport = null
+        if (uri != null && req != null) {
+            viewModel.saveExcelToUri(context, req.first, req.second, uri)
+        }
+    }
+
+    fun triggerDownloadExcel(reportType: PdfReportType, member: CommitteeMember? = null) {
+        pendingExcelExport = reportType to member
+        val prefix = reportType.name.lowercase()
+        downloadExcelLauncher.launch("GMSR_${prefix}_${MonthUtils.todayDateString()}.xls")
     }
 
     // SAF CSV Import / Export for Old Committee Records
@@ -407,13 +477,62 @@ fun MainFeatureShell(
         ((turns.maxOfOrNull { it.turnNumber } ?: 0L) + 1L)
     }
 
+    if (memberSession != null) {
+        val loggedMember = memberSession!!
+        MemberPortalScreen(
+            strings = strings,
+            currentLang = effectiveLang,
+            companySettings = companySettings,
+            member = loggedMember,
+            committee = memberCommittee ?: activeCommittee,
+            installments = memberInstallments,
+            turns = memberTurns,
+            notifications = memberNotifications,
+            onLanguageToggle = {
+                val next = if (effectiveLang == AppLanguage.EN) AppLanguage.UR else AppLanguage.EN
+                viewModel.setLanguage(next)
+            },
+            onViewReceipt = { rec -> receiptTarget = rec to loggedMember },
+            onMarkNotificationRead = viewModel::markNotificationRead,
+            onMarkAllNotificationsRead = viewModel::markAllMemberNotificationsRead,
+            onLogout = { viewModel.logoutMember() }
+        )
+        receiptTarget?.let { (inst, mem) ->
+            PaymentReceiptDialog(
+                strings = strings,
+                companySettings = companySettings,
+                committeeName = (memberCommittee ?: activeCommittee)?.name ?: "Committee",
+                installment = inst,
+                member = mem,
+                onViewPdf = {
+                    viewModel.generateAndHandleReceiptPdf(context, inst, mem, printMode = false, shareMode = false)
+                },
+                onPrintPdf = {
+                    viewModel.generateAndHandleReceiptPdf(context, inst, mem, printMode = true, shareMode = false)
+                },
+                onDownloadPdf = {
+                    viewModel.generateAndHandleReceiptPdf(context, inst, mem) { file ->
+                        pendingPdfFile = file
+                        downloadPdfLauncher.launch(file.name)
+                    }
+                },
+                onDismiss = { receiptTarget = null }
+            )
+        }
+        return
+    }
+
     if (isLoggedOut) {
         LocalLoginScreen(
             strings = strings,
+            companyContact = companySettings.easypaisaNumber.ifBlank { "03423498631" },
             showDefaultPinHint = isDefaultPinActive,
             isBusy = isBusy,
-            onSignIn = { username, pin, onErr ->
+            onAdminSignIn = { username, pin, onErr ->
                 viewModel.loginLocalUser(username, pin, onErr)
+            },
+            onMemberSignIn = { identifier, pin, onErr ->
+                viewModel.loginMember(identifier, pin, onErr)
             },
             onLanguageToggle = {
                 val next = if (effectiveLang == AppLanguage.EN) AppLanguage.UR else AppLanguage.EN
@@ -473,6 +592,15 @@ fun MainFeatureShell(
                             }
                         },
                         actions = {
+                            IconButton(
+                                onClick = { showNotificationsInbox = true },
+                                modifier = Modifier.testTag("top_notifications_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Notifications,
+                                    contentDescription = strings.notificationsTitle
+                                )
+                            }
                             IconButton(
                                 onClick = { viewModel.refreshAll() },
                                 modifier = Modifier.testTag("top_refresh_button")
@@ -613,6 +741,8 @@ fun MainFeatureShell(
                                         members = members,
                                         installments = installments,
                                         turns = turns,
+                                        forwardSummary = forwardMonthlySummary,
+                                        unreadNotificationCount = allNotifications.count { !it.isRead },
                                         selectedMonthKey = selectedMonthKey,
                                         onSelectMonth = viewModel::selectMonth,
                                         onOpenCommitteeSwitcher = { showCommitteeSwitcher = true },
@@ -624,10 +754,27 @@ fun MainFeatureShell(
                                             pendingDeleteTarget = PendingDeleteTarget.CommitteeTarget(it)
                                         },
                                         onQuickAddMember = { showAddMember = true },
-                                        onGoToInstallments = { currentSection = AppSection.PAYMENTS },
+                                        onGoToCommittees = { currentSection = AppSection.COMMITTEES },
+                                        onGoToMembers = { currentSection = AppSection.MEMBERS },
+                                        onGoToInstallments = {
+                                            viewModel.setInstallmentFilter(InstallmentFilter.ALL)
+                                            currentSection = AppSection.PAYMENTS
+                                        },
+                                        onGoToPendingInstallments = {
+                                            viewModel.setInstallmentFilter(InstallmentFilter.UNPAID)
+                                            currentSection = AppSection.PAYMENTS
+                                        },
+                                        onGoToForwardPayments = { currentSection = AppSection.FORWARD_PAYMENTS },
                                         onGoToTurns = { currentSection = AppSection.COMMITTEE_TURNS },
+                                        onGoToOldHistory = { currentSection = AppSection.OLD_RECORDS },
                                         onGoToReminders = { currentSection = AppSection.MESSAGE_REQUESTS },
                                         onGoToReports = { currentSection = AppSection.PDF_REPORTS },
+                                        onGoToSettings = { currentSection = AppSection.SETTINGS },
+                                        onOpenPaidDetail = { dashboardModalType = DashboardModalType.PAID_MEMBERS },
+                                        onOpenUnpaidDetail = { dashboardModalType = DashboardModalType.UNPAID_MEMBERS },
+                                        onOpenUpcomingDetail = { dashboardModalType = DashboardModalType.UPCOMING_COMMITTEE },
+                                        onOpenBackupRestore = { showBackupRestoreQuick = true },
+                                        onOpenNotifications = { showNotificationsInbox = true },
                                         onPrintSummary = { viewModel.printReport(context, PdfReportType.COMPLETE_FINANCIAL_SUMMARY) },
                                         onDownloadSummary = { triggerDownloadPdf(PdfReportType.COMPLETE_FINANCIAL_SUMMARY) },
                                         onOpenAuditHistory = { showActivityHistory = true },
@@ -661,7 +808,7 @@ fun MainFeatureShell(
                                         onCreateCommittee = { showCreateCommittee = true },
                                         onAddMember = { showAddMember = true },
                                         onEditMember = { memberToEdit = it },
-                                        onArchiveMember = viewModel::archiveMember,
+                                        onToggleMemberActive = viewModel::toggleMemberActive,
                                         onDeleteMember = { m ->
                                             deleteErrorMsg = null
                                             pendingDeleteTarget = PendingDeleteTarget.MemberTarget(m)
@@ -701,6 +848,9 @@ fun MainFeatureShell(
                                             deleteErrorMsg = null
                                             pendingDeleteTarget = PendingDeleteTarget.InstallmentTarget(rec)
                                         },
+                                        onViewReceipt = { rec, mem ->
+                                            receiptTarget = rec to mem
+                                        },
                                         onQuickWhatsApp = { m, amt ->
                                             val tpl = if (effectiveLang == AppLanguage.UR) ReminderStage.FIRST_28.defaultTemplateUr
                                             else ReminderStage.FIRST_28.defaultTemplateEn
@@ -721,6 +871,59 @@ fun MainFeatureShell(
                                         },
                                         onOpenActivityHistory = { showActivityHistory = true },
                                         onCreateCommittee = { showCreateCommittee = true }
+                                    )
+
+                                    AppSection.FORWARD_PAYMENTS -> ForwardPaymentsScreen(
+                                        strings = strings,
+                                        companySettings = companySettings,
+                                        committee = activeCommittee,
+                                        selectedMonthKey = selectedMonthKey,
+                                        monthlySummary = forwardMonthlySummary,
+                                        overallSummary = forwardOverallSummary,
+                                        organizers = forwardOrganizers,
+                                        forwardPayments = forwardPayments,
+                                        onSelectMonth = viewModel::selectMonth,
+                                        onCreateCommittee = { showCreateCommittee = true },
+                                        onAddOrganizer = {
+                                            forwardOrganizerToEdit = null
+                                            showForwardOrganizerDialog = true
+                                        },
+                                        onEditOrganizer = { org ->
+                                            forwardOrganizerToEdit = org
+                                            showForwardOrganizerDialog = true
+                                        },
+                                        onDeleteOrganizer = { org ->
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.ForwardOrganizerTarget(org)
+                                        },
+                                        onRecordForwardPayment = { orgId ->
+                                            forwardPaymentToEdit = null
+                                            initialForwardOrganizerId = orgId
+                                            showRecordForwardDialog = true
+                                        },
+                                        onEditForwardPayment = { rec ->
+                                            forwardPaymentToEdit = rec
+                                            initialForwardOrganizerId = rec.organizerId
+                                            showRecordForwardDialog = true
+                                        },
+                                        onReverseForwardPayment = { rec ->
+                                            forwardPaymentToReverse = rec
+                                        },
+                                        onDeleteForwardPayment = { rec ->
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.ForwardPaymentTarget(rec)
+                                        },
+                                        onOpenUrduSummary = { org, isMonthlyScope ->
+                                            val name = org?.organizerName ?: forwardOrganizers.firstOrNull()?.organizerName.orEmpty()
+                                            val msg = viewModel.buildOrganizerUrduSummary(name, isMonthlyScope)
+                                            organizerSummaryTarget = (org ?: forwardOrganizers.firstOrNull()) to msg
+                                        },
+                                        onExportForwardReportPdf = {
+                                            viewModel.generateAndOpenPdf(context, PdfReportType.FORWARD_PAYMENTS_SUMMARY, null, false)
+                                        },
+                                        onShowProofMissingSnackbar = {
+                                            scope.launch { snackbarHostState.showSnackbar("Unable to open attached proof file on this device.") }
+                                        }
                                     )
 
                                     AppSection.COMMITTEE_TURNS -> CommitteeTurnsScreen(
@@ -767,7 +970,44 @@ fun MainFeatureShell(
                                             pendingDeleteTarget = PendingDeleteTarget.TurnTarget(turn)
                                         },
                                         onGenerateFromShares = viewModel::generateTurnsFromMembers,
-                                        onLoadKnownTurns = viewModel::loadKnownHistoryTurns
+                                        onDrawRandomWinner = { viewModel.drawRandomEligibleWinner() },
+                                        onConfirmRandomWinner = { winner, payoutAmt, payoutDate, alsoNotify ->
+                                            val matchingPendingTurn = turns
+                                                .filter { it.statusEnum == PayoutStatus.PENDING }
+                                                .sortedBy { it.turnNumber }
+                                                .firstOrNull {
+                                                    it.recipientMemberId == winner.id ||
+                                                        it.recipientName.trim().equals("Upcoming", ignoreCase = true)
+                                                }
+                                            viewModel.saveCommitteeTurn(
+                                                existingTurn = matchingPendingTurn,
+                                                turnNumber = matchingPendingTurn?.turnNumber ?: nextSuggestedTurnNumber,
+                                                recipientMemberId = winner.id,
+                                                recipientName = winner.name,
+                                                recipientPhone = winner.phone,
+                                                payoutAmount = payoutAmt,
+                                                scheduledMonth = matchingPendingTurn?.scheduledMonth ?: selectedMonthKey,
+                                                payoutDate = payoutDate,
+                                                status = PayoutStatus.PAID,
+                                                confirmedByAdmin = true,
+                                                notes = "Confirmed Random Draw Winner"
+                                            )
+                                            if (alsoNotify) {
+                                                viewModel.sendUrduMessageAndNotify(
+                                                    context = context,
+                                                    type = UrduMessageType.WINNER_ANNOUNCEMENT,
+                                                    recipients = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE },
+                                                    installmentsForMonth = emptyList(),
+                                                    customBodyOrTemplate = "",
+                                                    adminMessage = "${winner.name} (${FormatUtils.formatMoney(payoutAmt, companySettings.currency)})",
+                                                    winnerDate = payoutDate,
+                                                    sendWhatsApp = false,
+                                                    sendSms = false,
+                                                    sendInApp = true,
+                                                    preventDuplicateInApp = false
+                                                )
+                                            }
+                                        }
                                     )
 
                                     AppSection.MESSAGE_REQUESTS -> RemindersScreen(
@@ -796,6 +1036,22 @@ fun MainFeatureShell(
                                         onOpenManualApp = { m, amt, useWa, stage, tpl ->
                                             viewModel.launchManualDispatch(context, m, amt, useWa, stage, tpl)
                                         },
+                                        renderUrduPreview = viewModel::renderUrduPreview,
+                                        onSendUrduMessages = { type, targets, insts, body, adminMsg, wDate, wa, sms, inApp, dedup ->
+                                            viewModel.sendUrduMessageAndNotify(
+                                                context = context,
+                                                type = type,
+                                                recipients = targets,
+                                                installmentsForMonth = insts,
+                                                customBodyOrTemplate = body,
+                                                adminMessage = adminMsg,
+                                                winnerDate = wDate,
+                                                sendWhatsApp = wa,
+                                                sendSms = sms,
+                                                sendInApp = inApp,
+                                                preventDuplicateInApp = dedup
+                                            )
+                                        },
                                         onOpenGatewaySettings = { showGatewayConfig = true },
                                         onCreateCommittee = { showCreateCommittee = true }
                                     )
@@ -816,6 +1072,9 @@ fun MainFeatureShell(
                                         },
                                         onSharePdf = { type, member ->
                                             viewModel.generateAndOpenPdf(context, type, member, true)
+                                        },
+                                        onDownloadExcel = { type, member ->
+                                            triggerDownloadExcel(type, member)
                                         }
                                     )
 
@@ -862,6 +1121,10 @@ fun MainFeatureShell(
                                         onOpenUserManagement = { showUserManagement = true },
                                         onOpenChangePassword = { showChangePassword = true },
                                         onOpenAuditLog = { showActivityHistory = true },
+                                        onResetAllData = {
+                                            deleteErrorMsg = null
+                                            pendingDeleteTarget = PendingDeleteTarget.ResetAllAppDataTarget
+                                        },
                                         onLogout = { viewModel.logout() }
                                     )
                                 }
@@ -957,8 +1220,18 @@ fun MainFeatureShell(
             monthlyShareContribution = activeCommittee?.monthlyInstallment ?: companySettings.defaultMonthlyContribution,
             existingMembers = members,
             onDismiss = { showAddMember = false },
-            onSave = { name, phone, number, shares ->
-                viewModel.addMember(name, phone, number, shares)
+            onSave = { name, phone, number, shares, memberCode, fatherName, address, joiningDate, accessPin ->
+                viewModel.addMember(
+                    name = name,
+                    phone = phone,
+                    committeeNumber = number,
+                    shares = shares,
+                    memberCode = memberCode,
+                    fatherName = fatherName,
+                    address = address,
+                    joiningDate = joiningDate,
+                    accessPin = accessPin
+                )
                 showAddMember = false
             }
         )
@@ -972,8 +1245,19 @@ fun MainFeatureShell(
             monthlyShareContribution = activeCommittee?.monthlyInstallment ?: companySettings.defaultMonthlyContribution,
             existingMembers = members,
             onDismiss = { memberToEdit = null },
-            onSave = { name, phone, number, shares ->
-                viewModel.updateMember(m, name, phone, number, shares)
+            onSave = { name, phone, number, shares, memberCode, fatherName, address, joiningDate, accessPin ->
+                viewModel.updateMember(
+                    member = m,
+                    newName = name,
+                    newPhone = phone,
+                    newCommitteeNumber = number,
+                    newShares = shares,
+                    newMemberCode = memberCode,
+                    newFatherName = fatherName,
+                    newAddress = address,
+                    newJoiningDate = joiningDate,
+                    newAccessPin = accessPin
+                )
                 memberToEdit = null
             }
         )
@@ -1002,6 +1286,13 @@ fun MainFeatureShell(
             },
             onOpenSms = {
                 viewModel.launchManualDispatch(context, m, amt, false, ReminderStage.CUSTOM, tpl)
+            },
+            onToggleActive = {
+                viewModel.toggleMemberActive(m)
+                memberToDetail = null
+            },
+            onViewReceipt = { rec ->
+                receiptTarget = rec to m
             }
         )
     }
@@ -1183,6 +1474,15 @@ fun MainFeatureShell(
             is PendingDeleteTarget.OldRecordTarget ->
                 strings.deleteLabel to
                     "Delete old committee record \"${target.record.committeeName}\"?"
+            is PendingDeleteTarget.ForwardOrganizerTarget ->
+                strings.deleteLabel to
+                    "Delete organizer \"${target.organizer.organizerName}\"? Organizers with confirmed forward payments cannot be removed until reversed."
+            is PendingDeleteTarget.ForwardPaymentTarget ->
+                strings.deleteLabel to
+                    "Delete reversed forward payment entry (${target.payment.receiptNumber ?: target.payment.id})?"
+            PendingDeleteTarget.ResetAllAppDataTarget ->
+                "Clear All Data (Fresh Start)" to
+                    "This will permanently delete all committees, members, turns, installments, forward payments, receipts, notifications, and old history records so you can start completely fresh. Admin PIN required."
         }
 
         AdminDeleteConfirmDialog(
@@ -1222,8 +1522,107 @@ fun MainFeatureShell(
                         viewModel.deleteOldCommitteeRecord(target.record, pin) { ok, err ->
                             if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
                         }
+                    is PendingDeleteTarget.ForwardOrganizerTarget ->
+                        viewModel.deleteForwardOrganizer(target.organizer.id, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
+                    is PendingDeleteTarget.ForwardPaymentTarget ->
+                        viewModel.deleteForwardPayment(target.payment.id, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
+                    PendingDeleteTarget.ResetAllAppDataTarget ->
+                        viewModel.clearAllAppDataForFreshStart(context, pin) { ok, err ->
+                            if (ok) pendingDeleteTarget = null else deleteErrorMsg = err
+                        }
                 }
             }
+        )
+    }
+
+    if (showForwardOrganizerDialog || forwardOrganizerToEdit != null) {
+        ForwardOrganizerEditorDialog(
+            strings = strings,
+            existingOrganizer = forwardOrganizerToEdit,
+            defaultMonthKey = selectedMonthKey,
+            defaultPayableAmount = activeCommittee?.monthlyCollectionTotal ?: 0L,
+            onDismiss = {
+                showForwardOrganizerDialog = false
+                forwardOrganizerToEdit = null
+            },
+            onSave = { name, phone, payable, mKey, notes ->
+                viewModel.saveForwardOrganizer(
+                    existingId = forwardOrganizerToEdit?.id,
+                    organizerName = name,
+                    organizerPhone = phone,
+                    totalPayableAmount = payable,
+                    monthKey = mKey,
+                    notes = notes
+                )
+                showForwardOrganizerDialog = false
+                forwardOrganizerToEdit = null
+            }
+        )
+    }
+
+    if (showRecordForwardDialog || forwardPaymentToEdit != null) {
+        RecordForwardPaymentDialog(
+            strings = strings,
+            currency = companySettings.currency,
+            organizers = forwardOrganizers,
+            existingPayment = forwardPaymentToEdit,
+            initialOrganizerId = initialForwardOrganizerId,
+            defaultMonthKey = selectedMonthKey,
+            onImportProof = { uri, onResult ->
+                viewModel.importProofFile(context, uri, onResult)
+            },
+            onDismiss = {
+                showRecordForwardDialog = false
+                forwardPaymentToEdit = null
+                initialForwardOrganizerId = null
+            },
+            onSave = { orgId, mKey, amt, pDate, method, txId, proofUri, proofLabel, notes, confirmed ->
+                viewModel.recordForwardPayment(
+                    existingPaymentId = forwardPaymentToEdit?.id,
+                    organizerId = orgId,
+                    monthKey = mKey,
+                    amountForwarded = amt,
+                    paymentDate = pDate,
+                    paymentMethod = method,
+                    transactionId = txId,
+                    proofUri = proofUri,
+                    proofLabel = proofLabel,
+                    notes = notes,
+                    confirmedByAdmin = confirmed
+                )
+                showRecordForwardDialog = false
+                forwardPaymentToEdit = null
+                initialForwardOrganizerId = null
+            }
+        )
+    }
+
+    forwardPaymentToReverse?.let { revTarget ->
+        ReverseForwardPaymentDialog(
+            strings = strings,
+            payment = revTarget,
+            currency = companySettings.currency,
+            onDismiss = { forwardPaymentToReverse = null },
+            onConfirmReverse = { reason ->
+                viewModel.reverseForwardPayment(revTarget.id, reason)
+                forwardPaymentToReverse = null
+            }
+        )
+    }
+
+    organizerSummaryTarget?.let { (org, msg) ->
+        OrganizerUrduSummaryDialog(
+            strings = strings,
+            organizer = org,
+            initialMessage = msg,
+            onCopyMessage = { text -> viewModel.copyMessageToClipboard(context, text) },
+            onSendWhatsApp = { phone, text -> viewModel.shareRawMessageWhatsApp(context, phone, text) },
+            onSendSms = { phone, text -> viewModel.shareRawMessageSms(context, phone, text) },
+            onDismiss = { organizerSummaryTarget = null }
         )
     }
 
@@ -1339,18 +1738,130 @@ fun MainFeatureShell(
             }
         )
     }
+
+    receiptTarget?.let { (inst, mem) ->
+        PaymentReceiptDialog(
+            strings = strings,
+            companySettings = companySettings,
+            committeeName = activeCommittee?.name ?: "Committee",
+            installment = inst,
+            member = mem,
+            onViewPdf = {
+                viewModel.generateAndHandleReceiptPdf(context, inst, mem, printMode = false, shareMode = false)
+            },
+            onPrintPdf = {
+                viewModel.generateAndHandleReceiptPdf(context, inst, mem, printMode = true, shareMode = false)
+            },
+            onDownloadPdf = {
+                viewModel.generateAndHandleReceiptPdf(context, inst, mem) { file ->
+                    pendingPdfFile = file
+                    downloadPdfLauncher.launch(file.name)
+                }
+            },
+            onDismiss = { receiptTarget = null }
+        )
+    }
+
+    dashboardModalType?.let { modal ->
+        val monthInsts = installments.filter { it.monthKey == selectedMonthKey }.sortedBy { it.committeeNumber }
+        val colStart = activeCommittee?.collectionDayStart ?: companySettings.defaultCollectionStartDay
+        val colEnd = activeCommittee?.collectionDayEnd ?: companySettings.defaultCollectionEndDay
+        when (modal) {
+            DashboardModalType.PAID_MEMBERS -> {
+                val items = monthInsts.filter { it.statusEnum == InstallmentStatus.PAID }.map {
+                    "#${it.committeeNumber} ${it.memberName}" to
+                        "${FormatUtils.formatMoney(it.paidAmount, companySettings.currency)} • ${it.paymentMethodEnum.label}${it.receiptNumber?.let { r -> " • $r" } ?: ""}"
+                }
+                DashboardListDetailDialog(
+                    strings = strings,
+                    title = "${strings.paidMembers} (${MonthUtils.formatMonthDisplay(selectedMonthKey)})",
+                    items = items,
+                    emptyMessage = "No paid installments recorded yet for this month.",
+                    primaryActionLabel = "Open Payments",
+                    onPrimaryAction = {
+                        viewModel.setInstallmentFilter(InstallmentFilter.PAID)
+                        currentSection = AppSection.PAYMENTS
+                    },
+                    onDismiss = { dashboardModalType = null }
+                )
+            }
+            DashboardModalType.UNPAID_MEMBERS -> {
+                val items = monthInsts.filter { it.statusEnum != InstallmentStatus.PAID }.map {
+                    val eff = it.effectiveStatus(colStart, colEnd)
+                    "#${it.committeeNumber} ${it.memberName} (${eff.name})" to
+                        "Remaining: ${FormatUtils.formatMoney(it.remainingAmount, companySettings.currency)} • ${it.memberPhone}"
+                }
+                DashboardListDetailDialog(
+                    strings = strings,
+                    title = "${strings.unpaidMembers} / ${strings.overdueLabel} (${MonthUtils.formatMonthDisplay(selectedMonthKey)})",
+                    items = items,
+                    emptyMessage = strings.noUnpaidMembers,
+                    primaryActionLabel = "Open Unpaid Payments",
+                    onPrimaryAction = {
+                        viewModel.setInstallmentFilter(InstallmentFilter.UNPAID)
+                        currentSection = AppSection.PAYMENTS
+                    },
+                    onDismiss = { dashboardModalType = null }
+                )
+            }
+            DashboardModalType.UPCOMING_COMMITTEE -> {
+                val pendingTurns = turns.filter { it.statusEnum == PayoutStatus.PENDING }.sortedBy { it.turnNumber }
+                val items = pendingTurns.map {
+                    "Turn #${it.turnNumber}: ${it.recipientName}" to
+                        "${MonthUtils.formatCollectionWindowFull(it.scheduledMonth, activeCommittee?.collectionDayStart ?: 28L, colEnd)} • ${FormatUtils.formatMoney(it.payoutAmount, companySettings.currency)}"
+                }
+                DashboardListDetailDialog(
+                    strings = strings,
+                    title = "Upcoming Committee Schedule",
+                    items = items,
+                    emptyMessage = "No pending payout turns remaining.",
+                    primaryActionLabel = "Open Winners & Turns",
+                    onPrimaryAction = { currentSection = AppSection.COMMITTEE_TURNS },
+                    onDismiss = { dashboardModalType = null }
+                )
+            }
+        }
+    }
+
+    if (showBackupRestoreQuick) {
+        BackupRestoreQuickDialog(
+            strings = strings,
+            committeesCount = committees.size,
+            membersCount = members.count { it.memberStatusEnum == MemberStatus.ACTIVE },
+            installmentsCount = installments.size,
+            oldRecordsCount = oldRecords.size,
+            onExportBackup = { startBackupExport(false) },
+            onRestoreBackup = {
+                restoreBackupLauncher.launch(arrayOf("application/json", "*/*"))
+            },
+            onDismiss = { showBackupRestoreQuick = false }
+        )
+    }
+
+    if (showNotificationsInbox) {
+        InAppNotificationsDialog(
+            strings = strings,
+            notifications = allNotifications,
+            onMarkRead = viewModel::markNotificationRead,
+            onDismiss = { showNotificationsInbox = false }
+        )
+    }
 }
 
 @Composable
 private fun LocalLoginScreen(
     strings: UiStrings,
+    companyContact: String,
     showDefaultPinHint: Boolean,
     isBusy: Boolean,
-    onSignIn: (username: String, pin: String, onError: (String) -> Unit) -> Unit,
+    onAdminSignIn: (username: String, pin: String, onError: (String) -> Unit) -> Unit,
+    onMemberSignIn: (identifier: String, pin: String, onError: (String) -> Unit) -> Unit,
     onLanguageToggle: () -> Unit,
     currentLang: AppLanguage
 ) {
+    var loginTab by remember { mutableIntStateOf(0) } // 0 = Admin, 1 = Member
     var username by remember { mutableStateOf("admin") }
+    var memberIdentifier by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
@@ -1388,26 +1899,64 @@ private fun LocalLoginScreen(
                     ) {
                         Image(
                             painter = painterResource(id = R.drawable.ic_gm_committee_fg),
-                            contentDescription = "GM HASMANI Logo",
+                            contentDescription = "G M S R HASHMANI THAR Logo",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
                     Text(strings.loginTitle, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    if (showDefaultPinHint) {
+                    Text(
+                        text = "Contact: $companyContact",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    TabRow(selectedTabIndex = loginTab) {
+                        Tab(
+                            selected = loginTab == 0,
+                            onClick = { loginTab = 0; errorMsg = null },
+                            text = { Text(strings.adminLoginTab, maxLines = 1) },
+                            modifier = Modifier.testTag("tab_admin_login")
+                        )
+                        Tab(
+                            selected = loginTab == 1,
+                            onClick = { loginTab = 1; errorMsg = null },
+                            text = { Text(strings.memberLoginTab, maxLines = 1) },
+                            modifier = Modifier.testTag("tab_member_login")
+                        )
+                    }
+
+                    if (loginTab == 0) {
+                        if (showDefaultPinHint) {
+                            Text(
+                                text = "Default Admin: admin / 1234",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        OutlinedTextField(
+                            value = username,
+                            onValueChange = { username = it; errorMsg = null },
+                            label = { Text(strings.usernameLabel) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("login_username_input")
+                        )
+                    } else {
                         Text(
-                            text = "Default: admin / 1234",
+                            text = "Sign in with your Member ID (e.g. GM-001) or Mobile Number & PIN (default 1234)",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
+                        OutlinedTextField(
+                            value = memberIdentifier,
+                            onValueChange = { memberIdentifier = it; errorMsg = null },
+                            label = { Text("${strings.memberIdLabel} / ${strings.mobileNumber}") },
+                            placeholder = { Text("GM-001 or 03001234567") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth().testTag("member_login_id_input")
+                        )
                     }
-                    OutlinedTextField(
-                        value = username,
-                        onValueChange = { username = it; errorMsg = null },
-                        label = { Text(strings.usernameLabel) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("login_username_input")
-                    )
+
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it; errorMsg = null },
@@ -1421,9 +1970,20 @@ private fun LocalLoginScreen(
                         Text(errorMsg ?: "", color = StatusUnpaidRed, style = MaterialTheme.typography.bodySmall)
                     }
                     Spacer(modifier = Modifier.height(4.dp))
+                    val canSubmit = if (loginTab == 0) {
+                        !isBusy && username.isNotBlank() && password.isNotBlank()
+                    } else {
+                        !isBusy && memberIdentifier.isNotBlank() && password.isNotBlank()
+                    }
                     Button(
-                        onClick = { onSignIn(username, password) { errorMsg = it } },
-                        enabled = !isBusy && username.isNotBlank() && password.isNotBlank(),
+                        onClick = {
+                            if (loginTab == 0) {
+                                onAdminSignIn(username, password) { errorMsg = it }
+                            } else {
+                                onMemberSignIn(memberIdentifier, password) { errorMsg = it }
+                            }
+                        },
+                        enabled = canSubmit,
                         modifier = Modifier.fillMaxWidth().height(52.dp).testTag("login_submit_button"),
                         shape = RoundedCornerShape(14.dp)
                     ) {
@@ -1436,13 +1996,14 @@ private fun LocalLoginScreen(
 }
 
 private fun sectionLabel(section: AppSection, strings: UiStrings): String = when (section) {
-    AppSection.DASHBOARD -> strings.navDashboard
+    AppSection.DASHBOARD -> strings.navHome
     AppSection.COMMITTEES -> strings.navCommittees
     AppSection.MEMBERS -> strings.navMembers
     AppSection.PAYMENTS -> strings.navInstallments
+    AppSection.FORWARD_PAYMENTS -> strings.navForwardPayments
     AppSection.COMMITTEE_TURNS -> strings.navTurns
-    AppSection.MESSAGE_REQUESTS -> strings.navMessageRequests
+    AppSection.MESSAGE_REQUESTS -> strings.navMessages
     AppSection.PDF_REPORTS -> strings.navPdfReports
     AppSection.OLD_RECORDS -> strings.navOldHistory
-    AppSection.SETTINGS -> strings.navReports
+    AppSection.SETTINGS -> strings.settingsSectionTitle
 }

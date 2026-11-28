@@ -17,12 +17,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Print
+import androidx.compose.material.icons.rounded.ReceiptLong
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material.icons.rounded.Warning
 import androidx.compose.material3.AlertDialog
@@ -62,13 +66,17 @@ import com.example.model.CommitteeTurn
 import com.example.model.CommitteeUtils
 import com.example.model.DuplicateConflictType
 import com.example.model.FormatUtils
+import com.example.model.InAppNotification
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
+import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.PaymentHistoryLog
 import com.example.model.PaymentMethod
+import com.example.ui.theme.StatusPaidBg
 import com.example.ui.theme.StatusPaidGreen
 import com.example.ui.theme.StatusPendingYellow
+import com.example.ui.theme.StatusUnpaidBg
 import com.example.ui.theme.StatusUnpaidRed
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -472,10 +480,34 @@ fun MemberEditorDialog(
     monthlyShareContribution: Long = 5000L,
     existingMembers: List<CommitteeMember> = emptyList(),
     onDismiss: () -> Unit,
-    onSave: (name: String, phone: String, committeeNumber: Long, shares: Double) -> Unit
+    onSave: (
+        name: String,
+        phone: String,
+        committeeNumber: Long,
+        shares: Double,
+        memberCode: String,
+        fatherName: String,
+        address: String,
+        joiningDate: String,
+        accessPin: String
+    ) -> Unit
 ) {
+    var memberCode by remember {
+        mutableStateOf(
+            existingMember?.memberCode?.takeIf { it.isNotBlank() }
+                ?: "GM-${suggestedCommitteeNumber.toString().padStart(3, '0')}"
+        )
+    }
     var name by remember { mutableStateOf(existingMember?.name ?: "") }
+    var fatherName by remember { mutableStateOf(existingMember?.fatherName ?: "") }
     var phone by remember { mutableStateOf(existingMember?.phone ?: "") }
+    var address by remember { mutableStateOf(existingMember?.address ?: "") }
+    var joiningDate by remember {
+        mutableStateOf(existingMember?.joiningDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString())
+    }
+    var accessPin by remember {
+        mutableStateOf(existingMember?.accessPin?.takeIf { it.isNotBlank() } ?: "1234")
+    }
     var numberText by remember {
         mutableStateOf((existingMember?.committeeNumber ?: suggestedCommitteeNumber).toString())
     }
@@ -501,17 +533,43 @@ fun MemberEditorDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 440.dp)
+                    .heightIn(max = 470.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = memberCode,
+                        onValueChange = { memberCode = it; errorText = null },
+                        label = { Text(strings.memberIdLabel) },
+                        placeholder = { Text("GM-001") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f).testTag("member_code_input")
+                    )
+                    OutlinedTextField(
+                        value = numberText,
+                        onValueChange = { numberText = it.filter { c -> c.isDigit() }; errorText = null },
+                        label = { Text(strings.committeeNumber) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.weight(0.9f).testTag("member_number_input")
+                    )
+                }
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it; errorText = null },
                     label = { Text("${strings.memberName} *") },
-                    placeholder = { Text("e.g. Ghulam Mustafa") },
+                    placeholder = { Text("e.g. Full Name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("member_name_input")
+                )
+                OutlinedTextField(
+                    value = fatherName,
+                    onValueChange = { fatherName = it; errorText = null },
+                    label = { Text(strings.fatherNameLabel) },
+                    placeholder = { Text("Optional Father / Guardian Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("member_father_input")
                 )
                 OutlinedTextField(
                     value = phone,
@@ -523,13 +581,30 @@ fun MemberEditorDialog(
                     modifier = Modifier.fillMaxWidth().testTag("member_phone_input")
                 )
                 OutlinedTextField(
-                    value = numberText,
-                    onValueChange = { numberText = it.filter { c -> c.isDigit() }; errorText = null },
-                    label = { Text(strings.committeeNumber) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    value = address,
+                    onValueChange = { address = it },
+                    label = { Text(strings.addressLabel) },
+                    placeholder = { Text("Optional City / Mohalla / Address") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth().testTag("member_number_input")
+                    modifier = Modifier.fillMaxWidth().testTag("member_address_input")
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = joiningDate,
+                        onValueChange = { joiningDate = it },
+                        label = { Text(strings.joiningDateLabel) },
+                        singleLine = true,
+                        modifier = Modifier.weight(1.1f).testTag("member_joining_date_input")
+                    )
+                    OutlinedTextField(
+                        value = accessPin,
+                        onValueChange = { accessPin = it.filter { c -> c.isDigit() || c.isLetter() } },
+                        label = { Text(strings.memberPinLabel) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                        singleLine = true,
+                        modifier = Modifier.weight(0.9f).testTag("member_pin_input")
+                    )
+                }
 
                 Text(strings.memberSharesLabel, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -591,11 +666,22 @@ fun MemberEditorDialog(
                         phone.trim().filter { it.isDigit() }.length < 7 -> errorText = "Enter a valid mobile number"
                         num == null || num !in 1L..500L -> errorText = "Committee number must be >= 1"
                         shares == null || shares <= 0.0 || shares > 50.0 -> errorText = "Shares must be between 0.5 and 50"
+                        accessPin.trim().length < 4 -> errorText = "Member login PIN must be at least 4 characters"
                         conflict?.type == DuplicateConflictType.PHONE ->
                             errorText = "Mobile number already belongs to #${conflict.existingMember.committeeNumber} ${conflict.existingMember.name}"
                         conflict?.type == DuplicateConflictType.COMMITTEE_NUMBER ->
                             errorText = "Committee #$num is already assigned to ${conflict.existingMember.name}"
-                        else -> onSave(name.trim(), phone.trim(), num, shares)
+                        else -> onSave(
+                            name.trim(),
+                            phone.trim(),
+                            num,
+                            shares,
+                            memberCode.trim().ifEmpty { "GM-${num.toString().padStart(3, '0')}" },
+                            fatherName.trim(),
+                            address.trim(),
+                            joiningDate.trim().ifEmpty { MonthUtils.todayDateString() },
+                            accessPin.trim().ifEmpty { "1234" }
+                        )
                     }
                 },
                 modifier = Modifier.testTag("save_member_button")
@@ -862,7 +948,7 @@ fun RecordPaymentDialog(
                     containerColor = when (selectedStatus) {
                         InstallmentStatus.PAID -> StatusPaidGreen
                         InstallmentStatus.PARTIAL -> StatusPendingYellow
-                        InstallmentStatus.UNPAID -> StatusUnpaidRed
+                        InstallmentStatus.UNPAID, InstallmentStatus.OVERDUE -> StatusUnpaidRed
                     }
                 ),
                 modifier = Modifier.testTag("save_payment_button")
@@ -887,7 +973,9 @@ fun MemberDetailDialog(
     onExportPdf: () -> Unit,
     onPrintPdf: (() -> Unit)? = null,
     onOpenWhatsApp: () -> Unit,
-    onOpenSms: () -> Unit
+    onOpenSms: () -> Unit,
+    onToggleActive: (() -> Unit)? = null,
+    onViewReceipt: ((InstallmentRecord) -> Unit)? = null
 ) {
     val memberInstallments = remember(installments, member.id) {
         installments.filter { it.memberId == member.id }.sortedBy { it.monthIndex }
@@ -901,12 +989,13 @@ fun MemberDetailDialog(
     val totalPaid = memberInstallments.sumOf { it.paidAmount }
     val totalDue = memberInstallments.sumOf { it.dueAmount }
     val monthlyDue = member.monthlyDue(monthlyShareContribution)
+    val isActive = member.memberStatusEnum == MemberStatus.ACTIVE
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text("#${member.committeeNumber} • ${member.name}", fontWeight = FontWeight.Bold)
+                Text("${member.displayMemberId} • #${member.committeeNumber} ${member.name}", fontWeight = FontWeight.Bold)
                 Text(
                     text = "${member.phone} • ${FormatUtils.formatShares(member.effectiveShares)} Share(s) (${FormatUtils.formatPkr(monthlyDue)}/mo)",
                     style = MaterialTheme.typography.bodySmall,
@@ -918,10 +1007,25 @@ fun MemberDetailDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 450.dp)
+                    .heightIn(max = 460.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        DetailRow(strings.memberIdLabel, member.displayMemberId)
+                        if (member.fatherName.isNotBlank()) DetailRow(strings.fatherNameLabel, member.fatherName)
+                        if (member.address.isNotBlank()) DetailRow(strings.addressLabel, member.address)
+                        if (member.joiningDate.isNotBlank()) DetailRow(strings.joiningDateLabel, member.joiningDate)
+                        DetailRow(strings.memberPinLabel, member.accessPin.ifBlank { "1234" })
+                        DetailRow("Account Status", if (isActive) strings.activeLabel else strings.archivedLabel)
+                    }
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -968,6 +1072,19 @@ fun MemberDetailDialog(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(strings.printLabel)
                         }
+                    }
+                }
+
+                if (onToggleActive != null) {
+                    OutlinedButton(
+                        onClick = onToggleActive,
+                        modifier = Modifier.fillMaxWidth().testTag("toggle_member_active_btn")
+                    ) {
+                        Text(
+                            text = if (isActive) strings.deactivateMemberLabel else strings.activateMemberLabel,
+                            color = if (isActive) StatusUnpaidRed else StatusPaidGreen,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
 
@@ -1031,13 +1148,20 @@ fun MemberDetailDialog(
                                 Text(
                                     text = "${FormatUtils.formatPkr(rec.paidAmount)} / ${FormatUtils.formatPkr(rec.dueAmount)}" +
                                         (if (rec.paidAmount > 0L) " • ${rec.paymentMethodEnum.label}" else "") +
-                                        (rec.transactionId?.let { " ($it)" } ?: "") +
+                                        (rec.receiptNumber?.let { " • $it" } ?: "") +
                                         (rec.paymentDate?.let { " • $it" } ?: ""),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            InstallmentStatusBadge(rec.statusEnum, strings)
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                if (rec.paidAmount > 0L && onViewReceipt != null) {
+                                    TextButton(onClick = { onViewReceipt(rec) }) {
+                                        Text(strings.viewReceiptLabel)
+                                    }
+                                }
+                                InstallmentStatusBadge(rec.statusEnum, strings)
+                            }
                         }
                     }
                 }
@@ -1312,6 +1436,254 @@ fun PaymentActivityHistoryDialog(
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(strings.close) }
+        }
+    )
+}
+
+@Composable
+fun PaymentReceiptDialog(
+    strings: UiStrings,
+    companySettings: AppCompanySettings,
+    committeeName: String,
+    installment: InstallmentRecord,
+    member: CommitteeMember?,
+    onViewPdf: () -> Unit,
+    onPrintPdf: () -> Unit,
+    onDownloadPdf: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val receiptNo = installment.receiptNumber?.takeIf { it.isNotBlank() }
+        ?: "GMSR-${installment.monthKey.replace("-", "")}-${installment.committeeNumber.toString().padStart(4, '0')}"
+    val sharesText = member?.let { FormatUtils.formatShares(it.effectiveShares) } ?: "1"
+    val memberIdDisplay = member?.displayMemberId ?: "GM-${installment.committeeNumber.toString().padStart(3, '0')}"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.ReceiptLong, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = {
+            Column {
+                Text(companySettings.companyName, fontWeight = FontWeight.Bold)
+                Text("Official Payment Receipt • ادائیگی کی رسید", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 430.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    color = StatusPaidBg.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        DetailRow("${strings.receiptNumberLabel} / رسید نمبر", receiptNo)
+                        DetailRow("Committee / کمیٹی", committeeName)
+                        DetailRow("${strings.memberIdLabel} / آئی ڈی", memberIdDisplay)
+                        DetailRow("${strings.memberName} / نام", installment.memberName)
+                        DetailRow("${strings.memberSharesLabel} / حصے", sharesText)
+                        DetailRow("Month / مہینہ", MonthUtils.formatMonthDisplay(installment.monthKey))
+                        DetailRow("${strings.amountPaid} / ادا شدہ رقم", FormatUtils.formatMoney(installment.paidAmount, companySettings.currency))
+                        DetailRow("Remaining / بقایا", FormatUtils.formatMoney(installment.remainingAmount, companySettings.currency))
+                        DetailRow("${strings.paymentDate} / تاریخ", installment.paymentDate ?: MonthUtils.todayDateString())
+                        DetailRow("${strings.paymentMethodLabel} / طریقہ", installment.paymentMethodEnum.label + (installment.transactionId?.let { " ($it)" } ?: ""))
+                        HorizontalDivider()
+                        DetailRow("Contact / رابطہ", companySettings.easypaisaNumber.ifBlank { "03423498631" })
+                        DetailRow("Admin / ایڈمن", companySettings.adminName)
+                        DetailRow("Signature / دستخط", "________________")
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onViewPdf, modifier = Modifier.weight(1f).testTag("receipt_view_pdf_btn")) {
+                        Icon(Icons.Rounded.PictureAsPdf, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("PDF", maxLines = 1)
+                    }
+                    Button(onClick = onPrintPdf, modifier = Modifier.weight(1f).testTag("receipt_print_btn")) {
+                        Icon(Icons.Rounded.Print, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(strings.printLabel, maxLines = 1)
+                    }
+                }
+                OutlinedButton(onClick = onDownloadPdf, modifier = Modifier.fillMaxWidth().testTag("receipt_download_btn")) {
+                    Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("${strings.downloadLabel} PDF")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(strings.close) }
+        }
+    )
+}
+
+@Composable
+fun DashboardListDetailDialog(
+    strings: UiStrings,
+    title: String,
+    items: List<Pair<String, String>>,
+    emptyMessage: String,
+    primaryActionLabel: String,
+    onPrimaryAction: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (items.isEmpty()) {
+                    Text(emptyMessage, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    items.forEach { (heading, sub) ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(heading, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                onDismiss()
+                onPrimaryAction()
+            }) {
+                Text(primaryActionLabel)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(strings.close) }
+        }
+    )
+}
+
+@Composable
+fun BackupRestoreQuickDialog(
+    strings: UiStrings,
+    committeesCount: Int,
+    membersCount: Int,
+    installmentsCount: Int,
+    oldRecordsCount: Int,
+    onExportBackup: () -> Unit,
+    onRestoreBackup: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Backup, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text(strings.backupRestoreTitle, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Export or restore your full G M S R HASHMANI THAR offline database (committees, members, payments, turns, notifications, and old history).")
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        DetailRow("Committees", "$committeesCount")
+                        DetailRow("Active Committee Members", "$membersCount")
+                        DetailRow("Active Committee Installments", "$installmentsCount")
+                        DetailRow("Old Committee History", "$oldRecordsCount")
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            onDismiss()
+                            onExportBackup()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Backup, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Export", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            onDismiss()
+                            onRestoreBackup()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Restore, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Restore", maxLines = 1)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(strings.close) }
+        }
+    )
+}
+
+@Composable
+fun InAppNotificationsDialog(
+    strings: UiStrings,
+    notifications: List<InAppNotification>,
+    onMarkRead: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val timeFmt = remember { SimpleDateFormat("dd MMM • HH:mm", Locale.US) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Notifications, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+        title = { Text("${strings.notificationsTitle} (${notifications.size})", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (notifications.isEmpty()) {
+                    Text(strings.noHistoryYet, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    notifications.take(40).forEach { item ->
+                        Surface(
+                            color = if (item.isRead) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f) else StatusUnpaidBg.copy(alpha = 0.35f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { if (!item.isRead) onMarkRead(item.id) }
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(item.title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                                    Text(timeFmt.format(Date(item.createdAtMillis)), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                if (!item.memberName.isNullOrBlank()) {
+                                    Text("To: ${item.memberName}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                                Text(item.message, style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }

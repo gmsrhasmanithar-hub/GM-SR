@@ -76,12 +76,15 @@ import com.example.model.CommitteeUtils
 import com.example.model.DispatchStatus
 import com.example.model.FormatUtils
 import com.example.model.InstallmentRecord
+import com.example.model.InstallmentStatus
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
+import com.example.model.UrduMessageType
 import com.example.ui.components.EmptyCommitteePrompt
 import com.example.ui.components.MonthSelectorBar
+import com.example.ui.theme.EmeraldPrimary
 import com.example.ui.theme.SmsBlue
 import com.example.ui.theme.StatusPaidBg
 import com.example.ui.theme.StatusPaidGreen
@@ -89,6 +92,7 @@ import com.example.ui.theme.StatusPendingBg
 import com.example.ui.theme.StatusPendingYellow
 import com.example.ui.theme.StatusUnpaidRed
 import com.example.ui.theme.WhatsAppGreen
+import androidx.compose.material3.Switch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -114,6 +118,19 @@ fun RemindersScreen(
     onSaveTemplate: (ReminderStage, AppLanguage, String) -> Unit,
     onSendViaApi: (recipients: List<Pair<CommitteeMember, Long>>, useWhatsApp: Boolean, stage: ReminderStage, template: String) -> Unit,
     onOpenManualApp: (member: CommitteeMember, dueAmount: Long, useWhatsApp: Boolean, stage: ReminderStage, template: String) -> Boolean,
+    renderUrduPreview: (type: UrduMessageType, memberName: String, amount: Long, date: String, remainingAmount: Long, adminMessage: String, customTemplate: String?) -> String,
+    onSendUrduMessages: (
+        type: UrduMessageType,
+        recipients: List<CommitteeMember>,
+        installmentsForMonth: List<InstallmentRecord>,
+        customBodyOrTemplate: String,
+        adminMessage: String,
+        winnerDate: String,
+        sendWhatsApp: Boolean,
+        sendSms: Boolean,
+        sendInApp: Boolean,
+        preventDuplicateInApp: Boolean
+    ) -> Unit,
     onOpenGatewaySettings: () -> Unit,
     onCreateCommittee: () -> Unit
 ) {
@@ -124,7 +141,7 @@ fun RemindersScreen(
         return
     }
 
-    var modeTab by remember { mutableIntStateOf(0) } // 0 = Payment Request, 1 = Bulk Reminders
+    var modeTab by remember { mutableIntStateOf(0) } // 0 = 6 Urdu Templates, 1 = Payment Request, 2 = Bulk Reminders
     var selectedStage by remember { mutableStateOf(ReminderStage.FIRST_28) }
     var useWhatsApp by remember { mutableStateOf(true) }
     var showExcludedPaid by remember { mutableStateOf(false) }
@@ -247,23 +264,275 @@ fun RemindersScreen(
     val isApiReadyForSelectedChannel = if (useWhatsApp) gatewayConfig.isWhatsAppApiConfigured else gatewayConfig.isSmsGatewayConfigured
     val timeFmt = remember { SimpleDateFormat("dd MMM HH:mm", Locale.US) }
 
+    // Urdu 6-Template Control Panel State
+    var urduType by remember { mutableStateOf(UrduMessageType.MONTHLY_PAYMENT_REMINDER) }
+    var urduTargetMode by remember { mutableIntStateOf(0) } // 0 = All Active, 1 = Unpaid/Overdue, 2 = Custom Select
+    val urduSelectedIds = remember { mutableStateListOf<String>() }
+    var urduDateInput by remember(selectedMonthKey) { mutableStateOf(MonthUtils.todayDateString()) }
+    var urduAdminNote by remember { mutableStateOf("") }
+    var sendChannelWa by remember { mutableStateOf(true) }
+    var sendChannelSms by remember { mutableStateOf(false) }
+    var sendChannelInApp by remember { mutableStateOf(true) }
+    var preventDuplicateInApp by remember { mutableStateOf(true) }
+
+    LaunchedEffect(activeMembers) {
+        val valid = activeMembers.map { it.id }.toSet()
+        urduSelectedIds.removeAll { it !in valid }
+        if (urduSelectedIds.isEmpty() && activeMembers.isNotEmpty()) {
+            urduSelectedIds.addAll(valid)
+        }
+    }
+
+    val sampleMember = activeMembers.firstOrNull()
+    val sampleInst = monthInstallments.firstOrNull { it.memberId == sampleMember?.id }
+    val sampleDue = sampleInst?.dueAmount ?: sampleMember?.monthlyDue(committee.monthlyInstallment) ?: committee.monthlyInstallment
+    val samplePaid = sampleInst?.paidAmount ?: sampleDue
+    val sampleRemaining = sampleInst?.remainingAmount ?: sampleDue
+    val urduPreviewGenerated = remember(urduType, sampleMember, samplePaid, sampleDue, sampleRemaining, urduDateInput, urduAdminNote) {
+        val amtForType = when (urduType) {
+            UrduMessageType.PAYMENT_RECEIVED -> samplePaid.coerceAtLeast(sampleDue)
+            UrduMessageType.PENDING_PAYMENT_REMINDER -> sampleRemaining.coerceAtLeast(sampleDue)
+            UrduMessageType.WINNER_ANNOUNCEMENT -> committee.eachPayoutAmount
+            else -> sampleDue
+        }
+        renderUrduPreview(
+            urduType,
+            sampleMember?.name ?: "Member",
+            amtForType,
+            urduDateInput,
+            sampleRemaining,
+            urduAdminNote.ifBlank { "براہ کرم وقت پر ادائیگی یقینی بنائیں۔" },
+            null
+        )
+    }
+    var urduEditableBody by remember(urduPreviewGenerated) { mutableStateOf(urduPreviewGenerated) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         TabRow(selectedTabIndex = modeTab) {
             Tab(
                 selected = modeTab == 0,
                 onClick = { modeTab = 0 },
-                text = { Text(strings.paymentRequestTitle, maxLines = 1, fontWeight = FontWeight.SemiBold) },
-                modifier = Modifier.testTag("tab_payment_request")
+                text = { Text("Urdu (A–F)", maxLines = 1, fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("tab_urdu_templates")
             )
             Tab(
                 selected = modeTab == 1,
                 onClick = { modeTab = 1 },
+                text = { Text(strings.paymentRequestTitle, maxLines = 1, fontWeight = FontWeight.SemiBold) },
+                modifier = Modifier.testTag("tab_payment_request")
+            )
+            Tab(
+                selected = modeTab == 2,
+                onClick = { modeTab = 2 },
                 text = { Text(strings.bulkRemindersTitle, maxLines = 1, fontWeight = FontWeight.SemiBold) },
                 modifier = Modifier.testTag("tab_bulk_reminders")
             )
         }
 
         if (modeTab == 0) {
+            val urduTargets = remember(urduTargetMode, activeMembers, eligibleRecipients, urduSelectedIds.toList()) {
+                when (urduTargetMode) {
+                    0 -> activeMembers
+                    1 -> eligibleRecipients.map { it.first }
+                    else -> activeMembers.filter { it.id in urduSelectedIds }
+                }
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    MonthSelectorBar(
+                        committee = committee,
+                        selectedMonthKey = selectedMonthKey,
+                        strings = strings,
+                        onSelectMonth = onSelectMonth
+                    )
+                }
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "${companySettings.companyName} • 6 Urdu Templates (A–F)",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = EmeraldPrimary
+                            )
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                val labels = listOf(
+                                    UrduMessageType.MONTHLY_PAYMENT_REMINDER to "A. ماہانہ ادائیگی",
+                                    UrduMessageType.PAYMENT_RECEIVED to "B. وصولی تصدیق",
+                                    UrduMessageType.PENDING_PAYMENT_REMINDER to "C. بقایا ادائیگی",
+                                    UrduMessageType.WINNER_ANNOUNCEMENT to "D. کمیٹی ونر",
+                                    UrduMessageType.MONTHLY_COMMITTEE_ANNOUNCEMENT to "E. ماہانہ اعلان",
+                                    UrduMessageType.GENERAL_ANNOUNCEMENT to "F. عمومی اعلان"
+                                )
+                                labels.forEach { (t, lbl) ->
+                                    FilterChip(
+                                        selected = urduType == t,
+                                        onClick = { urduType = t },
+                                        label = { Text(lbl) },
+                                        modifier = Modifier.testTag("urdu_type_${t.name}")
+                                    )
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = urduDateInput,
+                                onValueChange = { urduDateInput = it },
+                                label = { Text("${strings.paymentDate} [Date]") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            if (urduType == UrduMessageType.GENERAL_ANNOUNCEMENT) {
+                                OutlinedTextField(
+                                    value = urduAdminNote,
+                                    onValueChange = { urduAdminNote = it },
+                                    label = { Text("[Admin Message] / ایڈمن کا پیغام") },
+                                    minLines = 2,
+                                    maxLines = 4,
+                                    modifier = Modifier.fillMaxWidth().testTag("urdu_admin_message_input")
+                                )
+                            }
+
+                            OutlinedTextField(
+                                value = urduEditableBody,
+                                onValueChange = { urduEditableBody = it },
+                                label = { Text("Editable Urdu Preview (keeps G M S R HASHMANI THAR & 03423498631)") },
+                                minLines = 6,
+                                maxLines = 12,
+                                modifier = Modifier.fillMaxWidth().testTag("urdu_message_preview_input")
+                            )
+
+                            Text("Target Recipients (${urduTargets.size})", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                FilterChip(
+                                    selected = urduTargetMode == 0,
+                                    onClick = { urduTargetMode = 0 },
+                                    label = { Text("All Active (${activeMembers.size})") }
+                                )
+                                FilterChip(
+                                    selected = urduTargetMode == 1,
+                                    onClick = { urduTargetMode = 1 },
+                                    label = { Text("Unpaid Only (${eligibleRecipients.size})") }
+                                )
+                                FilterChip(
+                                    selected = urduTargetMode == 2,
+                                    onClick = { urduTargetMode = 2 },
+                                    label = { Text("Select (${urduSelectedIds.size})") }
+                                )
+                            }
+
+                            if (urduTargetMode == 2) {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    activeMembers.forEach { m ->
+                                        val isChecked = m.id in urduSelectedIds
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().clickable {
+                                                if (isChecked) urduSelectedIds.remove(m.id) else urduSelectedIds.add(m.id)
+                                            },
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Checkbox(
+                                                checked = isChecked,
+                                                onCheckedChange = { c ->
+                                                    if (c) {
+                                                        if (m.id !in urduSelectedIds) urduSelectedIds.add(m.id)
+                                                    } else {
+                                                        urduSelectedIds.remove(m.id)
+                                                    }
+                                                }
+                                            )
+                                            Text("${m.displayMemberId} • ${m.name} (${m.phone})", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = sendChannelInApp,
+                                    onClick = { sendChannelInApp = !sendChannelInApp },
+                                    label = { Text("In-App") }
+                                )
+                                FilterChip(
+                                    selected = sendChannelWa,
+                                    onClick = { sendChannelWa = !sendChannelWa },
+                                    label = { Text("WhatsApp") }
+                                )
+                                FilterChip(
+                                    selected = sendChannelSms,
+                                    onClick = { sendChannelSms = !sendChannelSms },
+                                    label = { Text("SMS") }
+                                )
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Prevent duplicate In-App notification this month", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                Switch(checked = preventDuplicateInApp, onCheckedChange = { preventDuplicateInApp = it })
+                            }
+
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { onCopyMessage(urduEditableBody) },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(strings.copyMessageLabel, maxLines = 1)
+                                }
+                                Button(
+                                    onClick = {
+                                        onSendUrduMessages(
+                                            urduType,
+                                            urduTargets,
+                                            monthInstallments,
+                                            urduEditableBody,
+                                            urduAdminNote,
+                                            urduDateInput,
+                                            sendChannelWa,
+                                            sendChannelSms,
+                                            sendChannelInApp,
+                                            preventDuplicateInApp
+                                        )
+                                    },
+                                    enabled = urduTargets.isNotEmpty() && (sendChannelInApp || sendChannelWa || sendChannelSms),
+                                    modifier = Modifier.weight(1.2f).testTag("send_urdu_message_btn"),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Send (${urduTargets.size})", maxLines = 1, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (modeTab == 1) {
             // Payment Request Message System (Easypaisa + Copy + WhatsApp + SMS)
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),

@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "GM Hasmani Committee Manager"
+rootProject.name = "G M S R HASHMANI THAR"
 
 include(":app")

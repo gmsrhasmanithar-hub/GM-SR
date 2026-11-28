@@ -2,4 +2,5 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="reports" path="reports/" />
     <files-path name="exports" path="exports/" />
+    <files-path name="forward_proofs" path="forward_proofs/" />
 </paths>

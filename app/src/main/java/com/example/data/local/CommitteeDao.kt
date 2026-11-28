@@ -209,4 +209,137 @@ interface CommitteeDao {
 
     @Query("DELETE FROM upload_queue WHERE status = 'COMPLETED'")
     suspend fun clearCompletedUploads()
+
+    // Members cross-committee lookup for Member Portal and ID generation
+    @Query("SELECT * FROM members ORDER BY committeeNumber ASC, createdAtMillis ASC")
+    suspend fun getAllMembersOnce(): List<MemberEntity>
+
+    @Query("SELECT COUNT(*) FROM installments WHERE receiptNumber IS NOT NULL")
+    suspend fun countReceiptsOnce(): Int
+
+    // Persistent In-App Notifications
+    @Query("SELECT * FROM in_app_notifications ORDER BY createdAtMillis DESC LIMIT 300")
+    fun observeNotifications(): Flow<List<InAppNotificationEntity>>
+
+    @Query("SELECT * FROM in_app_notifications WHERE memberId IS NULL OR memberId = :memberId ORDER BY createdAtMillis DESC LIMIT 200")
+    fun observeNotificationsForMember(memberId: String): Flow<List<InAppNotificationEntity>>
+
+    @Query("SELECT * FROM in_app_notifications ORDER BY createdAtMillis DESC")
+    suspend fun getAllNotificationsOnce(): List<InAppNotificationEntity>
+
+    @Query(
+        "SELECT * FROM in_app_notifications WHERE committeeId = :committeeId " +
+            "AND ((:memberId IS NULL AND memberId IS NULL) OR memberId = :memberId) " +
+            "AND notificationType = :notificationType AND monthKey = :monthKey LIMIT 1"
+    )
+    suspend fun findDuplicateNotificationOnce(
+        committeeId: String,
+        memberId: String?,
+        notificationType: String,
+        monthKey: String
+    ): InAppNotificationEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotification(notification: InAppNotificationEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNotifications(notifications: List<InAppNotificationEntity>)
+
+    @Query("UPDATE in_app_notifications SET isRead = 1 WHERE id = :notificationId")
+    suspend fun markNotificationRead(notificationId: String)
+
+    @Query("UPDATE in_app_notifications SET isRead = 1 WHERE memberId IS NULL OR memberId = :memberId")
+    suspend fun markAllNotificationsReadForMember(memberId: String)
+
+    // Forward Committee Organizers & Forward Payments
+    @Query("SELECT * FROM forward_organizers WHERE committeeId = :committeeId ORDER BY createdAtMillis DESC")
+    fun observeForwardOrganizers(committeeId: String): Flow<List<ForwardOrganizerEntity>>
+
+    @Query("SELECT * FROM forward_organizers ORDER BY createdAtMillis DESC")
+    fun observeAllForwardOrganizers(): Flow<List<ForwardOrganizerEntity>>
+
+    @Query("SELECT * FROM forward_organizers WHERE committeeId = :committeeId ORDER BY createdAtMillis DESC")
+    suspend fun getForwardOrganizersOnce(committeeId: String): List<ForwardOrganizerEntity>
+
+    @Query("SELECT * FROM forward_organizers WHERE id = :organizerId LIMIT 1")
+    suspend fun getForwardOrganizerByIdOnce(organizerId: String): ForwardOrganizerEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertForwardOrganizer(organizer: ForwardOrganizerEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertForwardOrganizers(organizers: List<ForwardOrganizerEntity>)
+
+    @Update
+    suspend fun updateForwardOrganizer(organizer: ForwardOrganizerEntity)
+
+    @Query("DELETE FROM forward_organizers WHERE id = :organizerId")
+    suspend fun deleteForwardOrganizerById(organizerId: String)
+
+    @Query("SELECT * FROM forward_payments WHERE committeeId = :committeeId ORDER BY paymentDate DESC, createdAtMillis DESC")
+    fun observeForwardPayments(committeeId: String): Flow<List<ForwardPaymentEntity>>
+
+    @Query("SELECT * FROM forward_payments ORDER BY paymentDate DESC, createdAtMillis DESC")
+    fun observeAllForwardPayments(): Flow<List<ForwardPaymentEntity>>
+
+    @Query("SELECT * FROM forward_payments WHERE committeeId = :committeeId ORDER BY paymentDate DESC, createdAtMillis DESC")
+    suspend fun getForwardPaymentsOnce(committeeId: String): List<ForwardPaymentEntity>
+
+    @Query("SELECT * FROM forward_payments WHERE id = :paymentId LIMIT 1")
+    suspend fun getForwardPaymentByIdOnce(paymentId: String): ForwardPaymentEntity?
+
+    @Query("SELECT COUNT(*) FROM forward_payments WHERE organizerId = :organizerId AND confirmedByAdmin = 1 AND isReversed = 0")
+    suspend fun countActiveForwardPaymentsForOrganizer(organizerId: String): Int
+
+    @Query("SELECT COUNT(*) FROM forward_payments WHERE receiptNumber IS NOT NULL")
+    suspend fun countForwardReceiptsOnce(): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertForwardPayment(payment: ForwardPaymentEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertForwardPayments(payments: List<ForwardPaymentEntity>)
+
+    @Update
+    suspend fun updateForwardPayment(payment: ForwardPaymentEntity)
+
+    @Query("DELETE FROM forward_payments WHERE id = :paymentId")
+    suspend fun deleteForwardPaymentById(paymentId: String)
+
+    // Fresh Start Reset Helpers
+    @Query("DELETE FROM forward_payments")
+    suspend fun deleteAllForwardPayments()
+
+    @Query("DELETE FROM forward_organizers")
+    suspend fun deleteAllForwardOrganizers()
+
+    @Query("DELETE FROM payment_logs")
+    suspend fun deleteAllPaymentLogs()
+
+    @Query("DELETE FROM reminder_logs")
+    suspend fun deleteAllReminderLogs()
+
+    @Query("DELETE FROM installments")
+    suspend fun deleteAllInstallments()
+
+    @Query("DELETE FROM committee_turns")
+    suspend fun deleteAllTurns()
+
+    @Query("DELETE FROM members")
+    suspend fun deleteAllMembers()
+
+    @Query("DELETE FROM committees")
+    suspend fun deleteAllCommittees()
+
+    @Query("DELETE FROM old_committee_records")
+    suspend fun deleteAllOldRecords()
+
+    @Query("DELETE FROM in_app_notifications")
+    suspend fun deleteAllNotifications()
+
+    @Query("DELETE FROM audit_logs")
+    suspend fun deleteAllAuditLogs()
+
+    @Query("DELETE FROM upload_queue")
+    suspend fun deleteAllUploadQueue()
 }

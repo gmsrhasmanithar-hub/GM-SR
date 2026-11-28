@@ -5,6 +5,9 @@ import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
 import com.example.model.CommitteeUtils
 import com.example.model.DuplicateConflictType
+import com.example.model.ForwardFinancialCalculator
+import com.example.model.ForwardOrganizer
+import com.example.model.ForwardPaymentRecord
 import com.example.model.FormatUtils
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
@@ -195,5 +198,129 @@ class CommitteeLogicUnitTest {
         assertTrue(!staff.isAdmin)
         assertEquals(com.example.model.UploadQueueStatus.FAILED, com.example.model.UploadQueueStatus.fromRaw("FAILED"))
         assertEquals(com.example.model.UploadQueueStatus.PENDING, com.example.model.UploadQueueStatus.fromRaw("unknown"))
+    }
+
+    @Test
+    fun `overdue status member id fallback and urdu template codes behave properly`() {
+        val pastUnpaid = InstallmentRecord(
+            id = "i_past",
+            monthKey = "2020-01",
+            dueAmount = 5000L,
+            paidAmount = 0L,
+            status = InstallmentStatus.UNPAID.name
+        )
+        val pastPaid = pastUnpaid.copy(paidAmount = 5000L, status = InstallmentStatus.PAID.name)
+        assertEquals(InstallmentStatus.OVERDUE, pastUnpaid.effectiveStatus(28L, 8L))
+        assertEquals(InstallmentStatus.PAID, pastPaid.effectiveStatus(28L, 8L))
+
+        val autoCodeMember = CommitteeMember(name = "Test", committeeNumber = 7L, memberCode = "")
+        val explicitCodeMember = CommitteeMember(name = "Test", committeeNumber = 7L, memberCode = "GM-099")
+        assertEquals("GM-007", autoCodeMember.displayMemberId)
+        assertEquals("GM-099", explicitCodeMember.displayMemberId)
+
+        assertEquals(listOf("A", "B", "C", "D", "E", "F"), com.example.model.UrduMessageType.entries.map { it.code })
+    }
+
+    @Test
+    fun `forward financial calculator computes monthly and overall summaries without double counting`() {
+        val committee = Committee(
+            id = "c1",
+            name = "Thar Circle",
+            memberCount = 3L,
+            totalShares = 3L,
+            monthlyInstallment = 10_000L,
+            totalMonths = 3L
+        )
+        val m1 = CommitteeMember(id = "m1", committeeId = "c1", name = "Ali", committeeNumber = 1L, shares = 1.0)
+        val m2 = CommitteeMember(id = "m2", committeeId = "c1", name = "Bilal", committeeNumber = 2L, shares = 1.0)
+        val m3 = CommitteeMember(id = "m3", committeeId = "c1", name = "Zain", committeeNumber = 3L, shares = 1.0)
+
+        val installments = listOf(
+            // Nov 2026: 10k + 4k + 0 = 14k collected out of 30k
+            InstallmentRecord(id = "i1", committeeId = "c1", memberId = "m1", monthKey = "2026-11", dueAmount = 10_000L, paidAmount = 10_000L, status = InstallmentStatus.PAID.name),
+            InstallmentRecord(id = "i2", committeeId = "c1", memberId = "m2", monthKey = "2026-11", dueAmount = 10_000L, paidAmount = 4_000L, status = InstallmentStatus.PARTIAL.name),
+            InstallmentRecord(id = "i3", committeeId = "c1", memberId = "m3", monthKey = "2026-11", dueAmount = 10_000L, paidAmount = 0L, status = InstallmentStatus.UNPAID.name),
+            // Dec 2026: 10k collected out of 10k
+            InstallmentRecord(id = "i4", committeeId = "c1", memberId = "m1", monthKey = "2026-12", dueAmount = 10_000L, paidAmount = 10_000L, status = InstallmentStatus.PAID.name)
+        )
+
+        val orgNov = ForwardOrganizer(
+            id = "org1",
+            committeeId = "c1",
+            organizerName = "Haji Ismail",
+            organizerPhone = "03001234567",
+            totalPayableAmount = 30_000L,
+            monthKey = "2026-11"
+        )
+        val orgDec = ForwardOrganizer(
+            id = "org2",
+            committeeId = "c1",
+            organizerName = "Karim Organizer",
+            organizerPhone = "03009876543",
+            totalPayableAmount = 30_000L,
+            monthKey = "2026-12"
+        )
+
+        val forwardPayments = listOf(
+            // Effective Nov transfer: 10,000
+            ForwardPaymentRecord(
+                id = "fp1", committeeId = "c1", organizerId = "org1", monthKey = "2026-11",
+                amountForwarded = 10_000L, confirmedByAdmin = true, isReversed = false, paymentDate = "2026-11-30"
+            ),
+            // Unconfirmed transfer must be excluded
+            ForwardPaymentRecord(
+                id = "fp2", committeeId = "c1", organizerId = "org1", monthKey = "2026-11",
+                amountForwarded = 5_000L, confirmedByAdmin = false, isReversed = false, paymentDate = "2026-11-30"
+            ),
+            // Reversed transfer must be excluded
+            ForwardPaymentRecord(
+                id = "fp3", committeeId = "c1", organizerId = "org1", monthKey = "2026-11",
+                amountForwarded = 8_000L, confirmedByAdmin = true, isReversed = true, paymentDate = "2026-11-30"
+            ),
+            // Effective Dec transfer: 6,000
+            ForwardPaymentRecord(
+                id = "fp4", committeeId = "c1", organizerId = "org2", monthKey = "2026-12",
+                amountForwarded = 6_000L, confirmedByAdmin = true, isReversed = false, paymentDate = "2026-12-05"
+            )
+        )
+
+        val novSummary = ForwardFinancialCalculator.compute(
+            committee = committee,
+            members = listOf(m1, m2, m3),
+            installments = installments,
+            organizers = listOf(orgNov, orgDec),
+            forwardPayments = forwardPayments,
+            monthKey = "2026-11"
+        )
+        assertEquals(30_000L, novSummary.expectedFromMembers)
+        assertEquals(14_000L, novSummary.collectedFromMembers)
+        assertEquals(16_000L, novSummary.pendingMemberCollection)
+        assertEquals(30_000L, novSummary.forwardPaymentDue)
+        assertEquals(10_000L, novSummary.totalForwarded)
+        assertEquals(20_000L, novSummary.pendingForwardPayment)
+        assertEquals(4_000L, novSummary.amountCurrentlyHeldByAdmin)
+        assertEquals(1, novSummary.paidMemberCount)
+        assertEquals(1, novSummary.partialMemberCount)
+        assertEquals(1, novSummary.unpaidMemberCount)
+        assertEquals(1, novSummary.organizerBreakdowns.size)
+        assertEquals(10_000L, novSummary.organizerBreakdowns[0].forwardedAmount)
+        assertEquals(20_000L, novSummary.organizerBreakdowns[0].remainingAmount)
+
+        val overallSummary = ForwardFinancialCalculator.compute(
+            committee = committee,
+            members = listOf(m1, m2, m3),
+            installments = installments,
+            organizers = listOf(orgNov, orgDec),
+            forwardPayments = forwardPayments,
+            monthKey = null
+        )
+        assertEquals(40_000L, overallSummary.expectedFromMembers)
+        assertEquals(24_000L, overallSummary.collectedFromMembers)
+        assertEquals(16_000L, overallSummary.pendingMemberCollection)
+        assertEquals(60_000L, overallSummary.forwardPaymentDue)
+        assertEquals(16_000L, overallSummary.totalForwarded)
+        assertEquals(44_000L, overallSummary.pendingForwardPayment)
+        assertEquals(8_000L, overallSummary.amountCurrentlyHeldByAdmin)
+        assertEquals(2, overallSummary.organizerBreakdowns.size)
     }
 }

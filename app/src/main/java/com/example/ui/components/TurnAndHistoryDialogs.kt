@@ -354,7 +354,7 @@ fun TurnEditorDialog(
                         errorMsg = null
                     },
                     label = { Text("${strings.memberName} *") },
-                    placeholder = { Text("e.g. Ghulam Mustafa or Upcoming") },
+                    placeholder = { Text("e.g. Recipient Full Name") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth().testTag("turn_recipient_name_input")
                 )
@@ -538,7 +538,7 @@ fun OldCommitteeRecordEditorDialog(
                         value = payoutRecipient,
                         onValueChange = { payoutRecipient = it; errorMsg = null },
                         label = { Text("Payout Recipient") },
-                        placeholder = { Text("e.g. Ghulam Mustafa") },
+                        placeholder = { Text("e.g. Recipient Full Name") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -546,7 +546,7 @@ fun OldCommitteeRecordEditorDialog(
                         value = payoutAmount,
                         onValueChange = { payoutAmount = it },
                         label = { Text("Payout Amount") },
-                        placeholder = { Text("Rs. 50,000") },
+                        placeholder = { Text("e.g. 50000") },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )

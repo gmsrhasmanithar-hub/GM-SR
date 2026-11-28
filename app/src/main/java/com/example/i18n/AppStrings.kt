@@ -224,22 +224,102 @@ data class UiStrings(
     val newPasswordLabel: String,
     val addUserLabel: String,
     val syncServerUrlLabel: String,
-    val completeLocalSyncLabel: String
+    val completeLocalSyncLabel: String,
+    // Upgraded Dashboard, Members, Messaging, Portal, Receipts, Excel
+    val navHome: String,
+    val navMessages: String,
+    val overdueLabel: String,
+    val fatherNameLabel: String,
+    val addressLabel: String,
+    val joiningDateLabel: String,
+    val memberIdLabel: String,
+    val memberPinLabel: String,
+    val receiptNumberLabel: String,
+    val viewReceiptLabel: String,
+    val downloadExcelLabel: String,
+    val reportDailyCollection: String,
+    val randomDrawLabel: String,
+    val notificationsTitle: String,
+    val deactivateMemberLabel: String,
+    val activateMemberLabel: String,
+    val adminLoginTab: String,
+    val memberLoginTab: String,
+    val forward: ForwardUiStrings
+) {
+    val navForwardPayments: String get() = forward.navForwardPayments
+    val forwardPaymentsTitle: String get() = forward.forwardPaymentsTitle
+    val forwardPaymentsSubtitle: String get() = forward.forwardPaymentsSubtitle
+    val addOrganizerLabel: String get() = forward.addOrganizerLabel
+    val editOrganizerLabel: String get() = forward.editOrganizerLabel
+    val organizerNameLabel: String get() = forward.organizerNameLabel
+    val organizerMobileLabel: String get() = forward.organizerMobileLabel
+    val totalPayableLabel: String get() = forward.totalPayableLabel
+    val forwardedAmountLabel: String get() = forward.forwardedAmountLabel
+    val remainingForwardLabel: String get() = forward.remainingForwardLabel
+    val expectedFromMembersLabel: String get() = forward.expectedFromMembersLabel
+    val receivedFromMembersLabel: String get() = forward.receivedFromMembersLabel
+    val notYetReceivedLabel: String get() = forward.notYetReceivedLabel
+    val pendingForwardLabel: String get() = forward.pendingForwardLabel
+    val heldByAdminLabel: String get() = forward.heldByAdminLabel
+    val recordForwardPaymentLabel: String get() = forward.recordForwardPaymentLabel
+    val confirmForwardedCheckboxLabel: String get() = forward.confirmForwardedCheckboxLabel
+    val attachProofPhotoLabel: String get() = forward.attachProofPhotoLabel
+    val attachProofFileLabel: String get() = forward.attachProofFileLabel
+    val viewProofLabel: String get() = forward.viewProofLabel
+    val proofAttachedLabel: String get() = forward.proofAttachedLabel
+    val noProofAttachedLabel: String get() = forward.noProofAttachedLabel
+    val forwardHistoryTitle: String get() = forward.forwardHistoryTitle
+    val sendOrganizerUrduSummaryLabel: String get() = forward.sendOrganizerUrduSummaryLabel
+    val organizerUrduSummaryTitle: String get() = forward.organizerUrduSummaryTitle
+    val selectedMonthScopeLabel: String get() = forward.selectedMonthScopeLabel
+    val overallCommitteeScopeLabel: String get() = forward.overallCommitteeScopeLabel
+    val reportForwardPayments: String get() = forward.reportForwardPayments
+}
+
+data class ForwardUiStrings(
+    val navForwardPayments: String,
+    val forwardPaymentsTitle: String,
+    val forwardPaymentsSubtitle: String,
+    val addOrganizerLabel: String,
+    val editOrganizerLabel: String,
+    val organizerNameLabel: String,
+    val organizerMobileLabel: String,
+    val totalPayableLabel: String,
+    val forwardedAmountLabel: String,
+    val remainingForwardLabel: String,
+    val expectedFromMembersLabel: String,
+    val receivedFromMembersLabel: String,
+    val notYetReceivedLabel: String,
+    val pendingForwardLabel: String,
+    val heldByAdminLabel: String,
+    val recordForwardPaymentLabel: String,
+    val confirmForwardedCheckboxLabel: String,
+    val attachProofPhotoLabel: String,
+    val attachProofFileLabel: String,
+    val viewProofLabel: String,
+    val proofAttachedLabel: String,
+    val noProofAttachedLabel: String,
+    val forwardHistoryTitle: String,
+    val sendOrganizerUrduSummaryLabel: String,
+    val organizerUrduSummaryTitle: String,
+    val selectedMonthScopeLabel: String,
+    val overallCommitteeScopeLabel: String,
+    val reportForwardPayments: String
 )
 
 fun stringsFor(language: AppLanguage): UiStrings = when (language) {
     AppLanguage.EN -> UiStrings(
-        brandName = "GM HASMANI COMMITTEE",
-        appTitle = "GM HASMANI COMMITTEE",
-        appSubtitle = "Permanent Committee Book",
-        navDashboard = "Dashboard",
+        brandName = "G M S R HASHMANI THAR",
+        appTitle = "G M S R HASHMANI THAR",
+        appSubtitle = "Official Committee Management System • 03423498631",
+        navDashboard = "Home",
         navCommittees = "Committees",
         navMembers = "Members",
         navInstallments = "Payments",
-        navTurns = "Turns",
-        navMessageRequests = "Requests",
+        navTurns = "Winners",
+        navMessageRequests = "Messages",
         navPdfReports = "Reports",
-        navOldHistory = "Old History",
+        navOldHistory = "History",
         navReports = "Settings",
         switchCommittee = "Switch Committee",
         createNewCommittee = "CREATE NEW COMMITTEE",
@@ -360,18 +440,18 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         manualModeBadge = "Direct WhatsApp / SMS Mode (Offline)",
         reminderLogsTitle = "Recent Reminder Logs",
         historyTitle = "All Committees & Archive",
-        pdfReportsTitle = "9 PDF Reports (View, Print, Download, Share)",
+        pdfReportsTitle = "11 Financial Reports (PDF & Excel)",
         reportMemberList = "Complete Member List",
         reportMonthlyPayment = "Monthly Collection Report",
         reportPaidUnpaid = "Paid & Unpaid List",
         reportIndividualHistory = "Individual Member Statement",
         reportCollection = "Monthly Collection",
-        reportPayout = "Committee Payout Report",
+        reportPayout = "Committee Winners / Payouts",
         reportCompleteSummary = "Complete Financial Summary",
         reportPaidMembers = "Completed Payments Report",
         reportUnpaidMembers = "Pending Payments Report",
         reportIndividualCommittee = "Individual Committee Report",
-        reportCommitteePayouts = "Committee Payout / Turns Report",
+        reportCommitteePayouts = "Committee Payout / Winners Report",
         reportPreviousHistory = "Previous Committee History Report",
         selectMemberForReport = "Select Member",
         messagingApiSettingsTitle = "WhatsApp & SMS API",
@@ -396,7 +476,7 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         activityHistoryTitle = "Audit & Payment History",
         confirmRestoreTitle = "Confirm Backup Restore",
         confirmRestoreBody = "Restoring will update committee, member, turn, payment, and old history records on this phone. Continue?",
-        recordPayoutTitle = "Record Committee Payout",
+        recordPayoutTitle = "Record Committee Winner",
         payoutAmountLabel = "Payout Amount",
         backLabel = "Back",
         refreshLabel = "Refresh",
@@ -430,7 +510,7 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         userManagementTitle = "User Management",
         changePasswordTitle = "Change Password",
         logoutTitle = "Logout",
-        loginTitle = "GM HASMANI COMMITTEE Sign In",
+        loginTitle = "G M S R HASHMANI THAR",
         loginButton = "Sign In",
         usernameLabel = "Username",
         passwordPinLabel = "Password / PIN",
@@ -438,18 +518,66 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         newPasswordLabel = "New Password / PIN",
         addUserLabel = "Add User",
         syncServerUrlLabel = "Optional Sync URL (https://...)",
-        completeLocalSyncLabel = "Mark Synced via Local Backup"
+        completeLocalSyncLabel = "Mark Synced via Local Backup",
+        navHome = "Home",
+        navMessages = "Messages",
+        overdueLabel = "OVERDUE",
+        fatherNameLabel = "Father Name",
+        addressLabel = "Address",
+        joiningDateLabel = "Joining Date",
+        memberIdLabel = "Member ID",
+        memberPinLabel = "Member Login PIN",
+        receiptNumberLabel = "Receipt #",
+        viewReceiptLabel = "Receipt",
+        downloadExcelLabel = "Excel (.xls)",
+        reportDailyCollection = "Daily Collection Report",
+        randomDrawLabel = "Random Draw",
+        notificationsTitle = "Notifications",
+        deactivateMemberLabel = "Deactivate",
+        activateMemberLabel = "Activate",
+        adminLoginTab = "Admin Login",
+        memberLoginTab = "Member Login",
+        forward = ForwardUiStrings(
+            navForwardPayments = "Forward Pay",
+            forwardPaymentsTitle = "Forward Committee Payments",
+            forwardPaymentsSubtitle = "Track member collections, money forwarded to committee organizers, receipts & cash held by Admin.",
+            addOrganizerLabel = "+ Add Organizer",
+            editOrganizerLabel = "Edit Organizer",
+            organizerNameLabel = "Organizer / Recipient Name",
+            organizerMobileLabel = "Organizer Mobile Number",
+            totalPayableLabel = "Total Payable Amount",
+            forwardedAmountLabel = "Amount Forwarded",
+            remainingForwardLabel = "Pending Forward",
+            expectedFromMembersLabel = "Expected from Members",
+            receivedFromMembersLabel = "Received from Members",
+            notYetReceivedLabel = "Not Yet Received",
+            pendingForwardLabel = "Pending to Forward",
+            heldByAdminLabel = "Held by Admin (Cash-in-Hand)",
+            recordForwardPaymentLabel = "Record Forward Payment",
+            confirmForwardedCheckboxLabel = "I confirm this money has been physically/digitally forwarded to the organizer",
+            attachProofPhotoLabel = "Upload Photo Proof",
+            attachProofFileLabel = "Upload PDF / Receipt",
+            viewProofLabel = "View Proof",
+            proofAttachedLabel = "Proof Attached",
+            noProofAttachedLabel = "No Proof",
+            forwardHistoryTitle = "Forward Payment History",
+            sendOrganizerUrduSummaryLabel = "Urdu Summary to Organizer",
+            organizerUrduSummaryTitle = "Organizer Urdu Financial Summary",
+            selectedMonthScopeLabel = "Selected Month",
+            overallCommitteeScopeLabel = "Overall Committee",
+            reportForwardPayments = "Forward Committee Payments Report"
+        )
     )
 
     AppLanguage.UR -> UiStrings(
-        brandName = "GM HASMANI COMMITTEE",
-        appTitle = "GM HASMANI COMMITTEE",
-        appSubtitle = "مستقل کمیٹی حساب کتاب",
-        navDashboard = "ڈیش بورڈ",
+        brandName = "G M S R HASHMANI THAR",
+        appTitle = "G M S R HASHMANI THAR",
+        appSubtitle = "کمیٹی مینجمنٹ سسٹم • 03423498631",
+        navDashboard = "ہوم",
         navCommittees = "کمیٹیاں",
         navMembers = "ممبرز",
         navInstallments = "ادائیگیاں",
-        navTurns = "باریاں",
+        navTurns = "ونرز",
         navMessageRequests = "پیغامات",
         navPdfReports = "رپورٹس",
         navOldHistory = "پرانا ریکارڈ",
@@ -573,7 +701,7 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         manualModeBadge = "واٹس ایپ اور ایس ایم ایس براہِ راست (آف لائن)",
         reminderLogsTitle = "بھیجے گئے پیغامات",
         historyTitle = "تمام کمیٹیاں",
-        pdfReportsTitle = "9 PDF رپورٹس (دیکھیں، پرنٹ، ڈاؤن لوڈ، شیئر)",
+        pdfReportsTitle = "11 رپورٹس (PDF اور Excel: دیکھیں، پرنٹ، ڈاؤن لوڈ، شیئر)",
         reportMemberList = "ممبرز کی مکمل لسٹ",
         reportMonthlyPayment = "ماہانہ وصولی رپورٹ",
         reportPaidUnpaid = "ادا شدہ اور بقایا لسٹ",
@@ -643,7 +771,7 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         userManagementTitle = "صارفین کا انتظام",
         changePasswordTitle = "پاس ورڈ تبدیل کریں",
         logoutTitle = "لاگ آؤٹ",
-        loginTitle = "GM HASMANI COMMITTEE لاگ ان",
+        loginTitle = "G M S R HASHMANI THAR",
         loginButton = "داخل ہوں",
         usernameLabel = "یوزرنیم",
         passwordPinLabel = "پاس ورڈ / پن",
@@ -651,6 +779,54 @@ fun stringsFor(language: AppLanguage): UiStrings = when (language) {
         newPasswordLabel = "نیا پاس ورڈ / پن",
         addUserLabel = "صارف شامل کریں",
         syncServerUrlLabel = "سنک سرور لنک (اختیاری)",
-        completeLocalSyncLabel = "لوکل بیک اپ سے مکمل کریں"
+        completeLocalSyncLabel = "لوکل بیک اپ سے مکمل کریں",
+        navHome = "ہوم",
+        navMessages = "پیغامات",
+        overdueLabel = "تاخیر / بقایا",
+        fatherNameLabel = "والد کا نام",
+        addressLabel = "پتہ",
+        joiningDateLabel = "شمولیت کی تاریخ",
+        memberIdLabel = "ممبر آئی ڈی",
+        memberPinLabel = "ممبر لاگ ان پن",
+        receiptNumberLabel = "رسید نمبر",
+        viewReceiptLabel = "رسید",
+        downloadExcelLabel = "Excel (.xls)",
+        reportDailyCollection = "روزانہ وصولی رپورٹ",
+        randomDrawLabel = "قرعہ اندازی",
+        notificationsTitle = "اطلاعات / پیغامات",
+        deactivateMemberLabel = "غیر فعال کریں",
+        activateMemberLabel = "فعال کریں",
+        adminLoginTab = "ایڈمن لاگ ان",
+        memberLoginTab = "ممبر لاگ ان",
+        forward = ForwardUiStrings(
+            navForwardPayments = "فارورڈ ادائیگی",
+            forwardPaymentsTitle = "فارورڈ کمیٹی ادائیگیاں",
+            forwardPaymentsSubtitle = "ممبرز سے وصولی، آرگنائزر کو آگے ادا کی گئی رقم، رسیدیں اور ایڈمن کے پاس موجود رقم کا حساب۔",
+            addOrganizerLabel = "+ آرگنائزر شامل کریں",
+            editOrganizerLabel = "آرگنائزر میں ترمیم",
+            organizerNameLabel = "رقم وصول کنندہ / آرگنائزر کا نام",
+            organizerMobileLabel = "موبائل نمبر",
+            totalPayableLabel = "کل واجب الادا رقم",
+            forwardedAmountLabel = "آگے ادا کی گئی رقم",
+            remainingForwardLabel = "باقی فارورڈ رقم",
+            expectedFromMembersLabel = "ممبرز سے متوقع رقم",
+            receivedFromMembersLabel = "ممبرز سے وصول شدہ",
+            notYetReceivedLabel = "ابھی وصول نہیں ہوئی",
+            pendingForwardLabel = "آگے ادا کرنا باقی",
+            heldByAdminLabel = "ایڈمن کے پاس موجود رقم",
+            recordForwardPaymentLabel = "فارورڈ ادائیگی درج کریں",
+            confirmForwardedCheckboxLabel = "میں تصدیق کرتا ہوں کہ یہ رقم آرگنائزر کو واقعی ادا / ارسال کر دی گئی ہے",
+            attachProofPhotoLabel = "تصویر رسید اپلوڈ",
+            attachProofFileLabel = "PDF / فائل اپلوڈ",
+            viewProofLabel = "رسید دیکھیں",
+            proofAttachedLabel = "ثبوت منسلک ہے",
+            noProofAttachedLabel = "کوئی ثبوت نہیں",
+            forwardHistoryTitle = "فارورڈ ادائیگی ہسٹری",
+            sendOrganizerUrduSummaryLabel = "آرگنائزر کو اردو حساب بھیجیں",
+            organizerUrduSummaryTitle = "آرگنائزر کے لیے اردو مالی خلاصہ",
+            selectedMonthScopeLabel = "منتخب مہینہ",
+            overallCommitteeScopeLabel = "مجموعی کمیٹی",
+            reportForwardPayments = "فارورڈ کمیٹی ادائیگی رپورٹ"
+        )
     )
 }

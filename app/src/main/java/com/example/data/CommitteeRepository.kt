@@ -1,12 +1,17 @@
 package com.example.data
 
 import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.room.withTransaction
 import com.example.data.local.AppDatabase
 import com.example.data.local.AuditLogEntity
 import com.example.data.local.CommitteeDao
 import com.example.data.local.CommitteeEntity
 import com.example.data.local.CommitteeTurnEntity
+import com.example.data.local.ForwardOrganizerEntity
+import com.example.data.local.ForwardPaymentEntity
+import com.example.data.local.InAppNotificationEntity
 import com.example.data.local.InstallmentEntity
 import com.example.data.local.LocalUserEntity
 import com.example.data.local.MemberEntity
@@ -21,17 +26,22 @@ import com.example.model.CommitteeMember
 import com.example.model.CommitteeStatus
 import com.example.model.CommitteeTurn
 import com.example.model.DispatchStatus
+import com.example.model.ForwardOrganizer
+import com.example.model.ForwardPaymentRecord
+import com.example.model.InAppNotification
 import com.example.model.InstallmentRecord
 import com.example.model.InstallmentStatus
 import com.example.model.LocalUser
 import com.example.model.MemberStatus
 import com.example.model.MonthUtils
+import com.example.model.NotificationType
 import com.example.model.OldCommitteeRecord
 import com.example.model.OldHistoryCsvUtils
 import com.example.model.PasswordHasher
 import com.example.model.PaymentHistoryLog
 import com.example.model.PaymentMethod
 import com.example.model.PayoutStatus
+import com.example.model.PhoneUtils
 import com.example.model.ReminderChannel
 import com.example.model.ReminderLog
 import com.example.model.ReminderStage
@@ -50,6 +60,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
@@ -103,151 +115,120 @@ class CommitteeRepository(
     fun observeUploadQueue(): Flow<List<UploadQueueItem>> =
         dao.observeUploadQueue().map { list -> list.map { it.toModel() } }
 
-    // -------------------------------------------------------------------------
-    // Initial Non-Destructive Known History Seed
-    // -------------------------------------------------------------------------
+    fun observeNotifications(): Flow<List<InAppNotification>> =
+        dao.observeNotifications().map { list -> list.map { it.toModel() } }
 
-    /**
-     * Seeds the user's known GM HASMANI Committee + Turns 1..4 ONLY when zero committees exist
-     * on device, ensuring existing user records are never touched or overwritten.
-     */
-    suspend fun ensureKnownInitialCommitteeIfEmpty(): String? {
-        val existing = dao.getAllCommitteesOnce()
-        if (existing.isNotEmpty()) return null
+    fun observeNotificationsForMember(memberId: String): Flow<List<InAppNotification>> =
+        dao.observeNotificationsForMember(memberId).map { list -> list.map { it.toModel() } }
 
+    fun observeForwardOrganizers(committeeId: String): Flow<List<ForwardOrganizer>> =
+        dao.observeForwardOrganizers(committeeId).map { list -> list.map { it.toModel() } }
+
+    fun observeAllForwardOrganizers(): Flow<List<ForwardOrganizer>> =
+        dao.observeAllForwardOrganizers().map { list -> list.map { it.toModel() } }
+
+    fun observeForwardPayments(committeeId: String): Flow<List<ForwardPaymentRecord>> =
+        dao.observeForwardPayments(committeeId).map { list -> list.map { it.toModel() } }
+
+    fun observeAllForwardPayments(): Flow<List<ForwardPaymentRecord>> =
+        dao.observeAllForwardPayments().map { list -> list.map { it.toModel() } }
+
+    suspend fun backfillMemberCodesAndReceiptsIfNeeded() {
+        val allMembers = dao.getAllMembersOnce()
         val now = System.currentTimeMillis()
-        val cid = KNOWN_MAIN_COMMITTEE_ID
-        val startMonth = "2026-08"
-        val totalMonths = 10L
-        val endMonth = MonthUtils.addMonths(startMonth, (totalMonths - 1).toInt())
-
-        val committee = CommitteeEntity(
-            id = cid,
-            name = "GM Hasmani Committee",
-            memberCount = 7L,
-            totalShares = 10L,
-            monthlyInstallment = 5000L,
-            totalMonths = totalMonths,
-            collectionDayStart = 28L,
-            collectionDayEnd = 8L,
-            payoutDay = 10L,
-            startMonth = startMonth,
-            endMonth = endMonth,
-            status = CommitteeStatus.ACTIVE.name,
-            notes = "7 Members • 10 Shares • Rs. 5,000/share • 28th to 8th collection",
-            createdAtMillis = now,
-            updatedAtMillis = now
-        )
-
-        val knownTurns = buildKnownTurnsEntities(cid, now)
-        db.withTransaction {
-            dao.insertCommittee(committee)
-            dao.insertTurns(knownTurns)
-            insertAuditInternal(
-                "System",
-                "INITIAL_HISTORY_SEED",
-                "COMMITTEE",
-                committee.name,
-                "Loaded known committee turns 1–4 (dates kept Unknown where not provided)."
-            )
-        }
-        return cid
-    }
-
-    suspend fun loadKnownHistoryTurnsForCommittee(committeeId: String, actorName: String = "Admin"): Result<Int> {
-        return try {
-            val existingTurns = dao.getTurnsOnce(committeeId)
-            val existingNumbers = existingTurns.map { it.turnNumber }.toSet()
-            val now = System.currentTimeMillis()
-            val candidates = buildKnownTurnsEntities(committeeId, now).filter { it.turnNumber !in existingNumbers }
-            if (candidates.isEmpty()) {
-                return Result.success(0)
+        val usedCodes = allMembers.mapNotNull { it.memberCode.takeIf { c -> c.isNotBlank() } }.toMutableSet()
+        var nextCodeCounter = 1
+        fun allocateMemberCode(): String {
+            while (true) {
+                val candidate = "GM-${nextCodeCounter.toString().padStart(3, '0')}"
+                nextCodeCounter++
+                if (usedCodes.add(candidate)) return candidate
             }
-            db.withTransaction {
-                dao.insertTurns(candidates)
-                insertAuditInternal(
-                    actorName,
-                    "LOAD_KNOWN_TURNS",
-                    "TURN",
-                    committeeId,
-                    "Added ${candidates.size} known turn record(s) (Ghulam Mustafa, Abdul Aleem x2, Upcoming)."
+        }
+        val memberUpdates = mutableListOf<MemberEntity>()
+        allMembers.forEach { m ->
+            val needsCode = m.memberCode.isBlank()
+            val needsPin = m.accessPin.isBlank()
+            val needsJoin = m.joiningDate.isBlank()
+            if (needsCode || needsPin || needsJoin) {
+                memberUpdates.add(
+                    m.copy(
+                        memberCode = if (needsCode) allocateMemberCode() else m.memberCode,
+                        accessPin = if (needsPin) DEFAULT_MEMBER_PIN else m.accessPin,
+                        joiningDate = if (needsJoin) MonthUtils.todayDateString() else m.joiningDate,
+                        updatedAtMillis = now
+                    )
                 )
             }
-            Result.success(candidates.size)
+        }
+        if (memberUpdates.isNotEmpty()) {
+            db.withTransaction {
+                dao.insertMembers(memberUpdates)
+            }
+        }
+
+        // Non-destructively assign receipt numbers to existing paid/partial installments if missing
+        val committees = dao.getAllCommitteesOnce()
+        var seq = dao.countReceiptsOnce() + 1
+        val instUpdates = mutableListOf<InstallmentEntity>()
+        committees.forEach { c ->
+            dao.getInstallmentsOnce(c.id).forEach { inst ->
+                if (inst.paidAmount > 0L && inst.receiptNumber.isNullOrBlank()) {
+                    val ym = inst.monthKey.replace("-", "").ifBlank { MonthUtils.currentMonthKey().replace("-", "") }
+                    val receipt = "GMSR-$ym-${seq.toString().padStart(4, '0')}"
+                    seq++
+                    instUpdates.add(inst.copy(receiptNumber = receipt))
+                }
+            }
+        }
+        if (instUpdates.isNotEmpty()) {
+            db.withTransaction {
+                dao.insertInstallments(instUpdates)
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Fresh Start Reset (Admin-Verified Wipe of All Committees/Records)
+    // -------------------------------------------------------------------------
+
+    suspend fun clearAllDataForFreshStart(
+        currentUser: LocalUser?,
+        adminPassword: String,
+        context: Context? = null
+    ): Result<Unit> {
+        val authRes = verifyAdminAccess(currentUser, adminPassword)
+        if (authRes.isFailure) return Result.failure(authRes.exceptionOrNull()!!)
+
+        return try {
+            db.withTransaction {
+                dao.deleteAllForwardPayments()
+                dao.deleteAllForwardOrganizers()
+                dao.deleteAllPaymentLogs()
+                dao.deleteAllReminderLogs()
+                dao.deleteAllInstallments()
+                dao.deleteAllTurns()
+                dao.deleteAllMembers()
+                dao.deleteAllCommittees()
+                dao.deleteAllOldRecords()
+                dao.deleteAllNotifications()
+                dao.deleteAllAuditLogs()
+                dao.deleteAllUploadQueue()
+            }
+            context?.let { ctx ->
+                withContext(Dispatchers.IO) {
+                    val proofDir = File(ctx.filesDir, "forward_proofs")
+                    if (proofDir.exists()) {
+                        proofDir.listFiles()?.forEach { it.delete() }
+                    }
+                }
+            }
+            Result.success(Unit)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Result.failure(e)
         }
-    }
-
-    private fun buildKnownTurnsEntities(committeeId: String, now: Long): List<CommitteeTurnEntity> {
-        return listOf(
-            CommitteeTurnEntity(
-                id = "${committeeId}_turn_1",
-                committeeId = committeeId,
-                turnNumber = 1L,
-                recipientMemberId = null,
-                recipientName = "Ghulam Mustafa",
-                recipientPhone = null,
-                payoutAmount = 50000L,
-                scheduledMonth = "2026-08",
-                payoutDate = null,
-                status = PayoutStatus.PAID.name,
-                confirmedByAdmin = true,
-                notes = "First Committee (Date unknown — editable)",
-                createdAtMillis = now,
-                updatedAtMillis = now
-            ),
-            CommitteeTurnEntity(
-                id = "${committeeId}_turn_2",
-                committeeId = committeeId,
-                turnNumber = 2L,
-                recipientMemberId = null,
-                recipientName = "Abdul Aleem",
-                recipientPhone = null,
-                payoutAmount = 50000L,
-                scheduledMonth = "2026-09",
-                payoutDate = null,
-                status = PayoutStatus.PAID.name,
-                confirmedByAdmin = true,
-                notes = "Second Committee (Date unknown — editable)",
-                createdAtMillis = now,
-                updatedAtMillis = now
-            ),
-            CommitteeTurnEntity(
-                id = "${committeeId}_turn_3",
-                committeeId = committeeId,
-                turnNumber = 3L,
-                recipientMemberId = null,
-                recipientName = "Abdul Aleem",
-                recipientPhone = null,
-                payoutAmount = 50000L,
-                scheduledMonth = "2026-10",
-                payoutDate = null,
-                status = PayoutStatus.PAID.name,
-                confirmedByAdmin = true,
-                notes = "Third Committee (Date unknown — editable)",
-                createdAtMillis = now,
-                updatedAtMillis = now
-            ),
-            CommitteeTurnEntity(
-                id = "${committeeId}_turn_4",
-                committeeId = committeeId,
-                turnNumber = 4L,
-                recipientMemberId = null,
-                recipientName = "Upcoming",
-                recipientPhone = null,
-                payoutAmount = 50000L,
-                scheduledMonth = "2026-11",
-                payoutDate = null,
-                status = PayoutStatus.PENDING.name,
-                confirmedByAdmin = false,
-                notes = "Fourth Committee: 28 November 2026 to 8 December 2026 (Pending Admin Confirmation)",
-                createdAtMillis = now,
-                updatedAtMillis = now
-            )
-        )
     }
 
     // -------------------------------------------------------------------------
@@ -263,7 +244,7 @@ class CommitteeRepository(
         val defaultAdmin = LocalUserEntity(
             id = DEFAULT_ADMIN_ID,
             username = "admin",
-            displayName = "GM Hasmani Admin",
+            displayName = "G M S R HASHMANI THAR Admin",
             passwordHash = PasswordHasher.sha256(DEFAULT_ADMIN_PIN),
             role = UserRole.ADMIN.name,
             isActive = true,
@@ -271,6 +252,40 @@ class CommitteeRepository(
         )
         dao.insertUser(defaultAdmin)
         return defaultAdmin.toModel()
+    }
+
+    suspend fun authenticateMember(identifier: String, pin: String): Result<CommitteeMember> {
+        return try {
+            val cleanId = identifier.trim()
+            val cleanPin = pin.trim()
+            require(cleanId.isNotEmpty()) { "Enter your Member ID (e.g. GM-001) or Mobile Number" }
+            require(cleanPin.isNotEmpty()) { "Enter your Member PIN" }
+
+            val allMembers = dao.getAllMembersOnce().map { it.toModel() }
+            val normalizedPhone = PhoneUtils.toWhatsAppDigits(cleanId)
+            val matched = allMembers.filter {
+                it.displayMemberId.equals(cleanId, ignoreCase = true) ||
+                    it.memberCode.equals(cleanId, ignoreCase = true) ||
+                    it.phone.trim() == cleanId ||
+                    (normalizedPhone.length >= 7 && PhoneUtils.toWhatsAppDigits(it.phone) == normalizedPhone)
+            }
+            if (matched.isEmpty()) {
+                return Result.failure(IllegalArgumentException("No member found with ID or mobile \"$cleanId\""))
+            }
+            val activeMember = matched.firstOrNull { it.memberStatusEnum == MemberStatus.ACTIVE }
+                ?: return Result.failure(IllegalStateException("This member account is currently deactivated. Contact G M S R HASHMANI THAR (03423498631)."))
+
+            val expectedPin = activeMember.accessPin.ifBlank { DEFAULT_MEMBER_PIN }
+            if (expectedPin != cleanPin) {
+                return Result.failure(IllegalArgumentException("Incorrect Member PIN"))
+            }
+            recordAudit(activeMember.name, "MEMBER_LOGIN", "MEMBER", activeMember.displayMemberId, "Member signed into self-service portal")
+            Result.success(activeMember)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     suspend fun getUserById(userId: String): LocalUser? =
@@ -694,6 +709,11 @@ class CommitteeRepository(
         phone: String,
         committeeNumber: Long,
         shares: Double = 1.0,
+        memberCode: String = "",
+        fatherName: String = "",
+        address: String = "",
+        joiningDate: String = MonthUtils.todayDateString(),
+        accessPin: String = DEFAULT_MEMBER_PIN,
         actorName: String = "Admin"
     ): Result<String> {
         return try {
@@ -706,12 +726,31 @@ class CommitteeRepository(
             val memberId = UUID.randomUUID().toString()
             val cleanName = name.trim().take(80)
             val cleanPhone = phone.trim().take(25)
+            val cleanFather = fatherName.trim().take(80)
+            val cleanAddress = address.trim().take(200)
+            val cleanJoining = joiningDate.trim().ifBlank { MonthUtils.todayDateString() }.take(20)
+            val cleanPin = accessPin.trim().ifBlank { DEFAULT_MEMBER_PIN }.take(12)
+
+            val allCodes = dao.getAllMembersOnce().map { it.memberCode }.toSet()
+            val finalCode = memberCode.trim().takeIf { it.isNotBlank() } ?: run {
+                var idx = allCodes.size + 1
+                while ("GM-${idx.toString().padStart(3, '0')}" in allCodes) {
+                    idx++
+                }
+                "GM-${idx.toString().padStart(3, '0')}"
+            }
+
             val payoutMonth = MonthUtils.addMonths(committee.startMonth, (committeeNumber - 1).toInt().coerceAtLeast(0))
             val entity = MemberEntity(
                 id = memberId,
                 committeeId = committee.id,
+                memberCode = finalCode.take(24),
                 name = cleanName,
+                fatherName = cleanFather,
                 phone = cleanPhone,
+                address = cleanAddress,
+                joiningDate = cleanJoining,
+                accessPin = cleanPin,
                 committeeNumber = committeeNumber,
                 shares = safeShares,
                 payoutMonth = payoutMonth,
@@ -726,16 +765,20 @@ class CommitteeRepository(
                 dao.insertMember(entity)
                 insertAuditInternal(
                     actorName, "ADD_MEMBER", "MEMBER", cleanName,
-                    "Added #$committeeNumber ($cleanPhone) • $safeShares share(s) to ${committee.name}"
+                    "Added $finalCode (#$committeeNumber, $cleanPhone) • $safeShares share(s) to ${committee.name}"
                 )
                 enqueueUploadInternal(
-                    title = "Member Added: $cleanName (#$committeeNumber)",
+                    title = "Member Added: $cleanName ($finalCode)",
                     payloadType = "MEMBER",
                     payload = JSONObject().apply {
                         put("id", memberId)
+                        put("memberCode", finalCode)
                         put("committeeId", committee.id)
                         put("name", cleanName)
+                        put("fatherName", cleanFather)
                         put("phone", cleanPhone)
+                        put("address", cleanAddress)
+                        put("joiningDate", cleanJoining)
                         put("committeeNumber", committeeNumber)
                         put("shares", safeShares)
                     }
@@ -756,6 +799,11 @@ class CommitteeRepository(
         newPhone: String,
         newCommitteeNumber: Long,
         newShares: Double = member.effectiveShares,
+        newMemberCode: String = member.displayMemberId,
+        newFatherName: String = member.fatherName,
+        newAddress: String = member.address,
+        newJoiningDate: String = member.joiningDate,
+        newAccessPin: String = member.accessPin,
         actorName: String = "Admin"
     ): Result<Unit> {
         return try {
@@ -767,10 +815,20 @@ class CommitteeRepository(
             val now = System.currentTimeMillis()
             val cleanName = newName.trim().take(80)
             val cleanPhone = newPhone.trim().take(25)
+            val cleanCode = newMemberCode.trim().ifBlank { member.displayMemberId }.take(24)
+            val cleanFather = newFatherName.trim().take(80)
+            val cleanAddress = newAddress.trim().take(200)
+            val cleanJoining = newJoiningDate.trim().ifBlank { member.joiningDate.ifBlank { MonthUtils.todayDateString() } }.take(20)
+            val cleanPin = newAccessPin.trim().ifBlank { member.accessPin.ifBlank { DEFAULT_MEMBER_PIN } }.take(12)
             val newPayoutMonth = MonthUtils.addMonths(committee.startMonth, (newCommitteeNumber - 1).toInt().coerceAtLeast(0))
             val updatedMemberModel = member.copy(
+                memberCode = cleanCode,
                 name = cleanName,
+                fatherName = cleanFather,
                 phone = cleanPhone,
+                address = cleanAddress,
+                joiningDate = cleanJoining,
+                accessPin = cleanPin,
                 committeeNumber = newCommitteeNumber,
                 shares = safeShares,
                 payoutMonth = newPayoutMonth
@@ -781,8 +839,13 @@ class CommitteeRepository(
                     MemberEntity(
                         id = member.id,
                         committeeId = committee.id,
+                        memberCode = cleanCode,
                         name = cleanName,
+                        fatherName = cleanFather,
                         phone = cleanPhone,
+                        address = cleanAddress,
+                        joiningDate = cleanJoining,
+                        accessPin = cleanPin,
                         committeeNumber = newCommitteeNumber,
                         shares = safeShares,
                         payoutMonth = newPayoutMonth,
@@ -802,7 +865,6 @@ class CommitteeRepository(
                     committeeNumber = newCommitteeNumber,
                     updatedAtMillis = now
                 )
-                // Recalculate unpaid installment due amounts if shares changed
                 if (kotlin.math.abs(safeShares - member.effectiveShares) > 0.001) {
                     val newDue = updatedMemberModel.monthlyDue(committee.monthlyInstallment)
                     dao.getInstallmentsOnce(committee.id)
@@ -813,7 +875,7 @@ class CommitteeRepository(
                 }
                 insertAuditInternal(
                     actorName, "EDIT_MEMBER", "MEMBER", cleanName,
-                    "Updated #$newCommitteeNumber ($cleanPhone) • $safeShares share(s) in ${committee.name}"
+                    "Updated $cleanCode #$newCommitteeNumber ($cleanPhone) • $safeShares share(s) in ${committee.name}"
                 )
             }
             Result.success(Unit)
@@ -824,13 +886,22 @@ class CommitteeRepository(
         }
     }
 
-    suspend fun archiveMember(committeeId: String, member: CommitteeMember, actorName: String = "Admin"): Result<Unit> {
+    suspend fun setMemberActiveStatus(
+        committeeId: String,
+        member: CommitteeMember,
+        active: Boolean,
+        actorName: String = "Admin"
+    ): Result<Unit> {
         return try {
+            val newStatus = if (active) MemberStatus.ACTIVE.name else MemberStatus.ARCHIVED.name
             db.withTransaction {
-                dao.updateMemberStatus(member.id, MemberStatus.ARCHIVED.name, System.currentTimeMillis())
+                dao.updateMemberStatus(member.id, newStatus, System.currentTimeMillis())
                 insertAuditInternal(
-                    actorName, "ARCHIVE_MEMBER", "MEMBER", member.name,
-                    "Archived member #${member.committeeNumber} (history preserved)"
+                    actorName,
+                    if (active) "ACTIVATE_MEMBER" else "DEACTIVATE_MEMBER",
+                    "MEMBER",
+                    member.name,
+                    "${if (active) "Activated" else "Deactivated"} ${member.displayMemberId} (#${member.committeeNumber}) — financial history preserved"
                 )
             }
             Result.success(Unit)
@@ -840,6 +911,9 @@ class CommitteeRepository(
             Result.failure(e)
         }
     }
+
+    suspend fun archiveMember(committeeId: String, member: CommitteeMember, actorName: String = "Admin"): Result<Unit> =
+        setMemberActiveStatus(committeeId, member, active = false, actorName = actorName)
 
     suspend fun deleteMemberSafely(
         member: CommitteeMember,
@@ -1262,8 +1336,13 @@ class CommitteeRepository(
                     MemberEntity(
                         id = first.id,
                         committeeId = committee.id,
+                        memberCode = first.memberCode,
                         name = first.name,
+                        fatherName = first.fatherName,
                         phone = first.phone,
+                        address = first.address,
+                        joiningDate = first.joiningDate,
+                        accessPin = first.accessPin,
                         committeeNumber = second.committeeNumber,
                         shares = first.effectiveShares,
                         payoutMonth = firstNewMonth,
@@ -1279,8 +1358,13 @@ class CommitteeRepository(
                     MemberEntity(
                         id = second.id,
                         committeeId = committee.id,
+                        memberCode = second.memberCode,
                         name = second.name,
+                        fatherName = second.fatherName,
                         phone = second.phone,
+                        address = second.address,
+                        joiningDate = second.joiningDate,
+                        accessPin = second.accessPin,
                         committeeNumber = first.committeeNumber,
                         shares = second.effectiveShares,
                         payoutMonth = secondNewMonth,
@@ -1329,8 +1413,13 @@ class CommitteeRepository(
                     MemberEntity(
                         id = member.id,
                         committeeId = committee.id,
+                        memberCode = member.memberCode,
                         name = member.name,
+                        fatherName = member.fatherName,
                         phone = member.phone,
+                        address = member.address,
+                        joiningDate = member.joiningDate,
+                        accessPin = member.accessPin,
                         committeeNumber = member.committeeNumber,
                         shares = member.effectiveShares,
                         payoutMonth = member.payoutMonth,
@@ -1477,11 +1566,24 @@ class CommitteeRepository(
             val now = System.currentTimeMillis()
             val clampedPaid = newPaidAmount.coerceIn(0L, 10_000_000L)
             val effectiveDate = when (newStatus) {
-                InstallmentStatus.UNPAID -> null
+                InstallmentStatus.UNPAID, InstallmentStatus.OVERDUE -> if (clampedPaid > 0L) {
+                    (paymentDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString()).take(20)
+                } else null
                 else -> (paymentDate?.takeIf { it.isNotBlank() } ?: MonthUtils.todayDateString()).take(20)
             }
             val cleanNote = paymentNote?.trim()?.take(200)?.takeIf { it.isNotEmpty() }
             val cleanTxId = transactionId?.trim()?.take(80)?.takeIf { it.isNotEmpty() }
+
+            val existingReceipt = record.receiptNumber?.takeIf { it.isNotBlank() }
+            val receiptNo = if (clampedPaid > 0L) {
+                existingReceipt ?: run {
+                    val seq = dao.countReceiptsOnce() + 1
+                    val ym = record.monthKey.replace("-", "").ifBlank { MonthUtils.currentMonthKey().replace("-", "") }
+                    "GMSR-$ym-${seq.toString().padStart(4, '0')}"
+                }
+            } else {
+                null
+            }
 
             val entity = InstallmentEntity(
                 id = record.id,
@@ -1499,6 +1601,7 @@ class CommitteeRepository(
                 paymentNote = cleanNote,
                 paymentMethod = paymentMethod.name,
                 transactionId = cleanTxId,
+                receiptNumber = receiptNo,
                 createdAtMillis = record.createdAtMillis,
                 updatedAtMillis = now
             )
@@ -1523,16 +1626,18 @@ class CommitteeRepository(
                         newStatus = newStatus.name,
                         paymentMethod = paymentMethod.name,
                         transactionId = cleanTxId,
+                        receiptNumber = receiptNo,
                         actionNote = cleanNote,
                         createdAtMillis = now
                     )
                 )
                 insertAuditInternal(
                     actorName,
-                    if (newStatus == InstallmentStatus.UNPAID && record.paidAmount > 0L) "PAYMENT_REVERSED" else "PAYMENT_SAVED",
+                    if (clampedPaid == 0L && record.paidAmount > 0L) "PAYMENT_REVERSED" else "PAYMENT_SAVED",
                     "INSTALLMENT",
                     "${record.memberName} (${record.monthKey})",
                     "${record.status} (${record.paidAmount}) → ${newStatus.name} ($clampedPaid) via ${paymentMethod.label}" +
+                        (receiptNo?.let { " • Receipt: $it" } ?: "") +
                         (cleanTxId?.let { " • Tx: $it" } ?: "") +
                         (cleanNote?.let { " • Note: $it" } ?: "")
                 )
@@ -1547,6 +1652,7 @@ class CommitteeRepository(
                         put("monthKey", record.monthKey)
                         put("paidAmount", clampedPaid)
                         put("paymentMethod", paymentMethod.name)
+                        if (receiptNo != null) put("receiptNumber", receiptNo)
                         if (cleanTxId != null) put("transactionId", cleanTxId)
                         put("status", newStatus.name)
                     }
@@ -1686,6 +1792,123 @@ class CommitteeRepository(
     }
 
     // -------------------------------------------------------------------------
+    // Persistent In-App Notifications + Duplicate Check + Eligible Random Draw
+    // -------------------------------------------------------------------------
+
+    fun pickEligibleRandomTurnWinner(
+        members: List<CommitteeMember>,
+        existingTurns: List<CommitteeTurn>
+    ): CommitteeMember? {
+        val activeMembers = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }
+        if (activeMembers.isEmpty()) return null
+        val paidTurns = existingTurns.filter { it.statusEnum == PayoutStatus.PAID }
+        val eligible = activeMembers.filter { member ->
+            val maxSlots = member.effectiveShares.roundToInt().coerceAtLeast(1)
+            val wonCount = paidTurns.count { t ->
+                t.recipientMemberId == member.id ||
+                    t.recipientName.equals(member.name, ignoreCase = true)
+            }
+            wonCount < maxSlots
+        }
+        val pool = if (eligible.isNotEmpty()) eligible else activeMembers
+        return pool.random()
+    }
+
+    suspend fun sendInAppNotifications(
+        committeeId: String,
+        targetMembers: List<CommitteeMember>,
+        title: String,
+        message: String,
+        type: NotificationType,
+        monthKey: String,
+        preventDuplicate: Boolean = true,
+        actorName: String = "Admin"
+    ): Result<Pair<Int, Int>> {
+        return try {
+            val now = System.currentTimeMillis()
+            var created = 0
+            var skipped = 0
+            val toInsert = mutableListOf<InAppNotificationEntity>()
+
+            if (targetMembers.isEmpty()) {
+                val dup = if (preventDuplicate) {
+                    dao.findDuplicateNotificationOnce(committeeId, null, type.name, monthKey)
+                } else null
+                if (dup == null) {
+                    toInsert.add(
+                        InAppNotificationEntity(
+                            id = UUID.randomUUID().toString(),
+                            committeeId = committeeId,
+                            memberId = null,
+                            memberName = "All Members",
+                            title = title.take(120),
+                            message = message.take(600),
+                            notificationType = type.name,
+                            monthKey = monthKey,
+                            isRead = false,
+                            createdAtMillis = now
+                        )
+                    )
+                    created++
+                } else {
+                    skipped++
+                }
+            } else {
+                targetMembers.forEachIndexed { idx, m ->
+                    val dup = if (preventDuplicate) {
+                        dao.findDuplicateNotificationOnce(committeeId, m.id, type.name, monthKey)
+                    } else null
+                    if (dup == null) {
+                        toInsert.add(
+                            InAppNotificationEntity(
+                                id = UUID.randomUUID().toString(),
+                                committeeId = committeeId,
+                                memberId = m.id,
+                                memberName = m.name,
+                                title = title.take(120),
+                                message = message.take(600),
+                                notificationType = type.name,
+                                monthKey = monthKey,
+                                isRead = false,
+                                createdAtMillis = now + idx
+                            )
+                        )
+                        created++
+                    } else {
+                        skipped++
+                    }
+                }
+            }
+
+            if (toInsert.isNotEmpty()) {
+                db.withTransaction {
+                    dao.insertNotifications(toInsert)
+                    insertAuditInternal(
+                        actorName,
+                        "SEND_IN_APP_NOTIFICATION",
+                        "NOTIFICATION",
+                        title,
+                        "Sent $created notification(s) ($monthKey), skipped $skipped duplicate(s)"
+                    )
+                }
+            }
+            Result.success(created to skipped)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun markNotificationRead(notificationId: String) {
+        dao.markNotificationRead(notificationId)
+    }
+
+    suspend fun markAllNotificationsReadForMember(memberId: String) {
+        dao.markAllNotificationsReadForMember(memberId)
+    }
+
+    // -------------------------------------------------------------------------
     // Upload Queue (Pending / Completed / Failed / Retry)
     // -------------------------------------------------------------------------
 
@@ -1806,14 +2029,290 @@ class CommitteeRepository(
     }
 
     // -------------------------------------------------------------------------
-    // JSON Backup & Restore (v3 full schema + v1/v2 backward-compatible)
+    // Forward Committee Organizers & Forward Payment Tracking
+    // -------------------------------------------------------------------------
+
+    suspend fun saveForwardOrganizer(
+        organizerId: String?,
+        committeeId: String,
+        organizerName: String,
+        organizerPhone: String,
+        totalPayableAmount: Long,
+        monthKey: String,
+        notes: String?,
+        actorName: String = "Admin"
+    ): Result<ForwardOrganizer> {
+        return try {
+            val cleanName = organizerName.trim().take(80)
+            val cleanPhone = organizerPhone.trim().take(25)
+            require(cleanName.isNotBlank()) { "Organizer / recipient name is required." }
+            require(cleanPhone.isNotBlank()) { "Organizer mobile number is required." }
+            require(totalPayableAmount >= 0L) { "Payable amount cannot be negative." }
+
+            val now = System.currentTimeMillis()
+            val isNew = organizerId.isNullOrBlank()
+            val existing = if (!isNew) dao.getForwardOrganizerByIdOnce(organizerId!!) else null
+            val entity = ForwardOrganizerEntity(
+                id = existing?.id ?: UUID.randomUUID().toString(),
+                committeeId = committeeId,
+                organizerName = cleanName,
+                organizerPhone = cleanPhone,
+                totalPayableAmount = totalPayableAmount,
+                monthKey = monthKey.trim(),
+                notes = notes?.trim()?.takeIf { it.isNotBlank() },
+                status = existing?.status ?: CommitteeStatus.ACTIVE.name,
+                createdAtMillis = existing?.createdAtMillis ?: now,
+                updatedAtMillis = now
+            )
+
+            db.withTransaction {
+                dao.insertForwardOrganizer(entity)
+                insertAuditInternal(
+                    actorName = actorName,
+                    actionType = if (isNew) "ADD_FORWARD_ORGANIZER" else "EDIT_FORWARD_ORGANIZER",
+                    targetType = "FORWARD_ORGANIZER",
+                    targetName = cleanName,
+                    details = "Phone=$cleanPhone, Payable=$totalPayableAmount, Month=${monthKey.ifBlank { "All" }}"
+                )
+            }
+            Result.success(entity.toModel())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteForwardOrganizerSafely(
+        organizerId: String,
+        actorName: String = "Admin"
+    ): Result<Unit> {
+        return try {
+            val org = dao.getForwardOrganizerByIdOnce(organizerId)
+                ?: return Result.failure(IllegalArgumentException("Organizer not found."))
+            val activePayments = dao.countActiveForwardPaymentsForOrganizer(organizerId)
+            if (activePayments > 0) {
+                return Result.failure(
+                    IllegalStateException(
+                        "Cannot delete ${org.organizerName}: $activePayments confirmed forward payment(s) exist. Reverse those payments first."
+                    )
+                )
+            }
+            db.withTransaction {
+                dao.deleteForwardOrganizerById(organizerId)
+                insertAuditInternal(
+                    actorName = actorName,
+                    actionType = "DELETE_FORWARD_ORGANIZER",
+                    targetType = "FORWARD_ORGANIZER",
+                    targetName = org.organizerName,
+                    details = "Removed forward organizer (${org.organizerPhone})"
+                )
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Records a Forward Committee Payment to an organizer.
+     * Enforces explicit Admin confirmation (`confirmedByAdmin == true`) so member installment
+     * collections are NEVER automatically marked as forwarded.
+     */
+    suspend fun recordForwardPayment(
+        paymentId: String?,
+        committeeId: String,
+        organizerId: String,
+        monthKey: String,
+        amountForwarded: Long,
+        paymentDate: String,
+        paymentMethod: PaymentMethod,
+        transactionId: String?,
+        proofUri: String?,
+        proofLabel: String?,
+        notes: String?,
+        confirmedByAdmin: Boolean,
+        actorName: String = "Admin"
+    ): Result<ForwardPaymentRecord> {
+        return try {
+            require(confirmedByAdmin) {
+                "Explicit Admin confirmation is required before marking money as forwarded."
+            }
+            require(amountForwarded > 0L) {
+                "Forwarded amount must be greater than zero."
+            }
+            val org = dao.getForwardOrganizerByIdOnce(organizerId)
+                ?: return Result.failure(IllegalArgumentException("Please add/select a committee organizer first."))
+            val cleanDate = paymentDate.trim().ifBlank { MonthUtils.todayDateString() }
+            val cleanMonth = monthKey.trim().ifBlank { MonthUtils.currentMonthKey() }
+            val now = System.currentTimeMillis()
+            val existing = if (!paymentId.isNullOrBlank()) dao.getForwardPaymentByIdOnce(paymentId) else null
+
+            val receiptNo = existing?.receiptNumber?.takeIf { it.isNotBlank() } ?: run {
+                val seq = dao.countForwardReceiptsOnce() + 1
+                val ym = cleanMonth.replace("-", "")
+                "GMSR-FWD-$ym-${seq.toString().padStart(4, '0')}"
+            }
+
+            val entity = ForwardPaymentEntity(
+                id = existing?.id ?: UUID.randomUUID().toString(),
+                committeeId = committeeId,
+                organizerId = org.id,
+                organizerName = org.organizerName,
+                organizerPhone = org.organizerPhone,
+                monthKey = cleanMonth,
+                amountForwarded = amountForwarded,
+                paymentDate = cleanDate,
+                paymentMethod = paymentMethod.name,
+                transactionId = transactionId?.trim()?.takeIf { it.isNotBlank() },
+                receiptNumber = receiptNo,
+                proofUri = proofUri?.trim()?.takeIf { it.isNotBlank() },
+                proofLabel = proofLabel?.trim()?.takeIf { it.isNotBlank() },
+                notes = notes?.trim()?.takeIf { it.isNotBlank() },
+                confirmedByAdmin = true,
+                isReversed = existing?.isReversed ?: false,
+                reversedReason = existing?.reversedReason,
+                createdAtMillis = existing?.createdAtMillis ?: now,
+                updatedAtMillis = now
+            )
+
+            db.withTransaction {
+                dao.insertForwardPayment(entity)
+                insertAuditInternal(
+                    actorName = actorName,
+                    actionType = if (existing == null) "RECORD_FORWARD_PAYMENT" else "EDIT_FORWARD_PAYMENT",
+                    targetType = "FORWARD_PAYMENT",
+                    targetName = org.organizerName,
+                    details = "Receipt=$receiptNo, Amount=$amountForwarded, Date=$cleanDate, Method=${paymentMethod.label}, Proof=${proofLabel ?: "None"}"
+                )
+            }
+            Result.success(entity.toModel())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun reverseForwardPayment(
+        paymentId: String,
+        reason: String,
+        actorName: String = "Admin"
+    ): Result<ForwardPaymentRecord> {
+        return try {
+            val cleanReason = reason.trim()
+            require(cleanReason.isNotBlank()) { "Please enter a reason to reverse this forward payment." }
+            val existing = dao.getForwardPaymentByIdOnce(paymentId)
+                ?: return Result.failure(IllegalArgumentException("Forward payment record not found."))
+            if (existing.isReversed) {
+                return Result.failure(IllegalStateException("This forward payment is already reversed."))
+            }
+            val now = System.currentTimeMillis()
+            val updated = existing.copy(
+                isReversed = true,
+                reversedReason = cleanReason,
+                updatedAtMillis = now
+            )
+            db.withTransaction {
+                dao.updateForwardPayment(updated)
+                insertAuditInternal(
+                    actorName = actorName,
+                    actionType = "REVERSE_FORWARD_PAYMENT",
+                    targetType = "FORWARD_PAYMENT",
+                    targetName = existing.organizerName,
+                    details = "Reversed ${existing.receiptNumber ?: existing.id} (${existing.amountForwarded}): $cleanReason"
+                )
+            }
+            Result.success(updated.toModel())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteForwardPaymentSafely(
+        paymentId: String,
+        actorName: String = "Admin"
+    ): Result<Unit> {
+        return try {
+            val existing = dao.getForwardPaymentByIdOnce(paymentId)
+                ?: return Result.failure(IllegalArgumentException("Forward payment record not found."))
+            if (existing.confirmedByAdmin && !existing.isReversed) {
+                return Result.failure(
+                    IllegalStateException("Confirmed forward payments cannot be silently deleted. Use Reverse Payment with a reason first.")
+                )
+            }
+            db.withTransaction {
+                dao.deleteForwardPaymentById(paymentId)
+                insertAuditInternal(
+                    actorName = actorName,
+                    actionType = "DELETE_FORWARD_PAYMENT",
+                    targetType = "FORWARD_PAYMENT",
+                    targetName = existing.organizerName,
+                    details = "Deleted reversed/unconfirmed forward payment (${existing.receiptNumber ?: existing.id})"
+                )
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Copies a user-picked payment proof image or PDF URI into internal app storage
+     * (`filesDir/forward_proofs/...`) without requiring broad storage permissions.
+     */
+    suspend fun copyProofUriToInternalStorage(
+        context: Context,
+        sourceUri: Uri
+    ): Result<Pair<String, String>> = withContext(Dispatchers.IO) {
+        try {
+            val resolver = context.contentResolver
+            val mime = resolver.getType(sourceUri).orEmpty()
+            var displayName: String? = null
+            resolver.query(sourceUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) displayName = cursor.getString(idx)
+                }
+            }
+            val ext = when {
+                mime.contains("pdf", ignoreCase = true) || displayName?.endsWith(".pdf", true) == true -> "pdf"
+                mime.contains("png", ignoreCase = true) || displayName?.endsWith(".png", true) == true -> "png"
+                mime.contains("webp", ignoreCase = true) || displayName?.endsWith(".webp", true) == true -> "webp"
+                else -> "jpg"
+            }
+            val proofDir = File(context.filesDir, "forward_proofs").apply { mkdirs() }
+            val destFile = File(proofDir, "proof_${UUID.randomUUID()}.$ext")
+            resolver.openInputStream(sourceUri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            } ?: return@withContext Result.failure(IllegalStateException("Unable to read selected proof file."))
+
+            val label = displayName?.takeIf { it.isNotBlank() } ?: destFile.name
+            Result.success(destFile.absolutePath to label)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // JSON Backup & Restore (v5 full schema + v1/v2/v3/v4 backward-compatible)
     // -------------------------------------------------------------------------
 
     suspend fun exportFullBackupJson(companySettings: AppCompanySettings = AppCompanySettings()): Result<String> {
         return try {
             val root = JSONObject()
-            root.put("brand", "GM HASMANI COMMITTEE")
-            root.put("version", 3)
+            root.put("brand", "G M S R HASHMANI THAR")
+            root.put("version", 5)
             root.put("exportedAt", MonthUtils.todayDateString())
 
             root.put("settings", JSONObject().apply {
@@ -1855,8 +2354,13 @@ class CommitteeRepository(
                 dao.getMembersOnce(c.id).forEach { m ->
                     membersArr.put(JSONObject().apply {
                         put("id", m.id)
+                        put("memberCode", m.memberCode)
                         put("name", m.name)
+                        put("fatherName", m.fatherName)
                         put("phone", m.phone)
+                        put("address", m.address)
+                        put("joiningDate", m.joiningDate)
+                        put("accessPin", m.accessPin)
                         put("committeeNumber", m.committeeNumber)
                         put("shares", m.shares)
                         put("payoutMonth", m.payoutMonth)
@@ -1903,9 +2407,48 @@ class CommitteeRepository(
                         if (!i.paymentNote.isNullOrBlank()) put("paymentNote", i.paymentNote)
                         put("paymentMethod", i.paymentMethod)
                         if (!i.transactionId.isNullOrBlank()) put("transactionId", i.transactionId)
+                        if (!i.receiptNumber.isNullOrBlank()) put("receiptNumber", i.receiptNumber)
                     })
                 }
                 cJson.put("installments", instArr)
+
+                val orgArr = JSONArray()
+                dao.getForwardOrganizersOnce(c.id).forEach { o ->
+                    orgArr.put(JSONObject().apply {
+                        put("id", o.id)
+                        put("organizerName", o.organizerName)
+                        put("organizerPhone", o.organizerPhone)
+                        put("totalPayableAmount", o.totalPayableAmount)
+                        put("monthKey", o.monthKey)
+                        if (!o.notes.isNullOrBlank()) put("notes", o.notes)
+                        put("status", o.status)
+                    })
+                }
+                cJson.put("forwardOrganizers", orgArr)
+
+                val fwdPayArr = JSONArray()
+                dao.getForwardPaymentsOnce(c.id).forEach { p ->
+                    fwdPayArr.put(JSONObject().apply {
+                        put("id", p.id)
+                        put("organizerId", p.organizerId)
+                        put("organizerName", p.organizerName)
+                        put("organizerPhone", p.organizerPhone)
+                        put("monthKey", p.monthKey)
+                        put("amountForwarded", p.amountForwarded)
+                        put("paymentDate", p.paymentDate)
+                        put("paymentMethod", p.paymentMethod)
+                        if (!p.transactionId.isNullOrBlank()) put("transactionId", p.transactionId)
+                        if (!p.receiptNumber.isNullOrBlank()) put("receiptNumber", p.receiptNumber)
+                        if (!p.proofUri.isNullOrBlank()) put("proofUri", p.proofUri)
+                        if (!p.proofLabel.isNullOrBlank()) put("proofLabel", p.proofLabel)
+                        if (!p.notes.isNullOrBlank()) put("notes", p.notes)
+                        put("confirmedByAdmin", p.confirmedByAdmin)
+                        put("isReversed", p.isReversed)
+                        if (!p.reversedReason.isNullOrBlank()) put("reversedReason", p.reversedReason)
+                    })
+                }
+                cJson.put("forwardPayments", fwdPayArr)
+
                 committeesArr.put(cJson)
             }
             root.put("committees", committeesArr)
@@ -1931,6 +2474,23 @@ class CommitteeRepository(
                 })
             }
             root.put("oldCommitteeRecords", oldArr)
+
+            val notifArr = JSONArray()
+            dao.getAllNotificationsOnce().forEach { n ->
+                notifArr.put(JSONObject().apply {
+                    put("id", n.id)
+                    put("committeeId", n.committeeId)
+                    if (!n.memberId.isNullOrBlank()) put("memberId", n.memberId)
+                    if (!n.memberName.isNullOrBlank()) put("memberName", n.memberName)
+                    put("title", n.title)
+                    put("message", n.message)
+                    put("notificationType", n.notificationType)
+                    put("monthKey", n.monthKey)
+                    put("isRead", n.isRead)
+                    put("createdAtMillis", n.createdAtMillis)
+                })
+            }
+            root.put("inAppNotifications", notifArr)
 
             Result.success(root.toString(2))
         } catch (e: CancellationException) {
@@ -1985,13 +2545,19 @@ class CommitteeRepository(
                             val mObj = membersArr.getJSONObject(mIdx)
                             val mid = mObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
                                 .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                            val cNum = mObj.optLong("committeeNumber", 1L).coerceIn(1L, 500L)
                             add(
                                 MemberEntity(
                                     id = mid,
                                     committeeId = cid,
+                                    memberCode = mObj.optString("memberCode").takeIf { it.isNotBlank() } ?: "GM-${cNum.toString().padStart(3, '0')}",
                                     name = mObj.getString("name").take(80),
+                                    fatherName = mObj.optString("fatherName"),
                                     phone = mObj.getString("phone").take(25),
-                                    committeeNumber = mObj.optLong("committeeNumber", 1L).coerceIn(1L, 500L),
+                                    address = mObj.optString("address"),
+                                    joiningDate = mObj.optString("joiningDate"),
+                                    accessPin = mObj.optString("accessPin").takeIf { it.isNotBlank() } ?: DEFAULT_MEMBER_PIN,
+                                    committeeNumber = cNum,
                                     shares = mObj.optDouble("shares", 1.0).coerceIn(0.5, 50.0),
                                     payoutMonth = mObj.optString("payoutMonth", committeeEntity.startMonth),
                                     payoutStatus = PayoutStatus.fromRaw(mObj.optString("payoutStatus")).name,
@@ -2057,6 +2623,7 @@ class CommitteeRepository(
                                     paymentNote = iObj.optString("paymentNote").takeIf { it.isNotBlank() },
                                     paymentMethod = PaymentMethod.fromRaw(iObj.optString("paymentMethod")).name,
                                     transactionId = iObj.optString("transactionId").takeIf { it.isNotBlank() },
+                                    receiptNumber = iObj.optString("receiptNumber").takeIf { it.isNotBlank() },
                                     createdAtMillis = now,
                                     updatedAtMillis = now
                                 )
@@ -2064,6 +2631,67 @@ class CommitteeRepository(
                         }
                     }
                     if (instEntities.isNotEmpty()) dao.insertInstallments(instEntities)
+
+                    val orgArr = cObj.optJSONArray("forwardOrganizers") ?: JSONArray()
+                    val orgEntities = buildList {
+                        for (oIdx in 0 until orgArr.length()) {
+                            val oObj = orgArr.getJSONObject(oIdx)
+                            val oid = oObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                                .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                            add(
+                                ForwardOrganizerEntity(
+                                    id = oid,
+                                    committeeId = cid,
+                                    organizerName = oObj.optString("organizerName", "Organizer").take(80),
+                                    organizerPhone = oObj.optString("organizerPhone").take(25),
+                                    totalPayableAmount = oObj.optLong("totalPayableAmount", 0L).coerceAtLeast(0L),
+                                    monthKey = oObj.optString("monthKey", committeeEntity.startMonth),
+                                    notes = oObj.optString("notes").takeIf { it.isNotBlank() },
+                                    status = CommitteeStatus.fromRaw(oObj.optString("status")).name,
+                                    createdAtMillis = now,
+                                    updatedAtMillis = now
+                                )
+                            )
+                        }
+                    }
+                    if (orgEntities.isNotEmpty()) dao.insertForwardOrganizers(orgEntities)
+
+                    val fwdArr = cObj.optJSONArray("forwardPayments") ?: JSONArray()
+                    val validOrgIds = orgEntities.map { it.id }.toSet()
+                    val fwdEntities = buildList {
+                        for (fIdx in 0 until fwdArr.length()) {
+                            val fObj = fwdArr.getJSONObject(fIdx)
+                            val fid = fObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                                .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                            val oid = fObj.optString("organizerId").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                            if (oid.isBlank() || oid !in validOrgIds) continue
+                            add(
+                                ForwardPaymentEntity(
+                                    id = fid,
+                                    committeeId = cid,
+                                    organizerId = oid,
+                                    organizerName = fObj.optString("organizerName", "Organizer").take(80),
+                                    organizerPhone = fObj.optString("organizerPhone").take(25),
+                                    monthKey = fObj.optString("monthKey", committeeEntity.startMonth),
+                                    amountForwarded = fObj.optLong("amountForwarded", 0L).coerceAtLeast(0L),
+                                    paymentDate = fObj.optString("paymentDate", MonthUtils.todayDateString()),
+                                    paymentMethod = PaymentMethod.fromRaw(fObj.optString("paymentMethod")).name,
+                                    transactionId = fObj.optString("transactionId").takeIf { it.isNotBlank() },
+                                    receiptNumber = fObj.optString("receiptNumber").takeIf { it.isNotBlank() },
+                                    proofUri = fObj.optString("proofUri").takeIf { it.isNotBlank() },
+                                    proofLabel = fObj.optString("proofLabel").takeIf { it.isNotBlank() },
+                                    notes = fObj.optString("notes").takeIf { it.isNotBlank() },
+                                    confirmedByAdmin = fObj.optBoolean("confirmedByAdmin", false),
+                                    isReversed = fObj.optBoolean("isReversed", false),
+                                    reversedReason = fObj.optString("reversedReason").takeIf { it.isNotBlank() },
+                                    createdAtMillis = now,
+                                    updatedAtMillis = now
+                                )
+                            )
+                        }
+                    }
+                    if (fwdEntities.isNotEmpty()) dao.insertForwardPayments(fwdEntities)
+
                     restoredCount++
                 }
 
@@ -2098,27 +2726,52 @@ class CommitteeRepository(
                 }
                 if (oldEntities.isNotEmpty()) dao.insertOldRecords(oldEntities)
 
+                val notifArr = root.optJSONArray("inAppNotifications") ?: JSONArray()
+                val notifEntities = buildList {
+                    for (nIdx in 0 until notifArr.length()) {
+                        val nObj = notifArr.getJSONObject(nIdx)
+                        val nid = nObj.optString("id").replace(Regex("[^a-zA-Z0-9_\\-]"), "")
+                            .takeIf { it.isNotBlank() }?.take(128) ?: UUID.randomUUID().toString()
+                        add(
+                            InAppNotificationEntity(
+                                id = nid,
+                                committeeId = nObj.optString("committeeId"),
+                                memberId = nObj.optString("memberId").takeIf { it.isNotBlank() },
+                                memberName = nObj.optString("memberName").takeIf { it.isNotBlank() },
+                                title = nObj.optString("title"),
+                                message = nObj.optString("message"),
+                                notificationType = nObj.optString("notificationType", NotificationType.GENERAL_ANNOUNCEMENT.name),
+                                monthKey = nObj.optString("monthKey"),
+                                isRead = nObj.optBoolean("isRead", false),
+                                createdAtMillis = nObj.optLong("createdAtMillis", now)
+                            )
+                        )
+                    }
+                }
+                if (notifEntities.isNotEmpty()) dao.insertNotifications(notifEntities)
+
                 insertAuditInternal(
                     actorName, "RESTORE_BACKUP", "BACKUP", "JSON Restore",
-                    "Restored $restoredCount committee(s) and ${oldEntities.size} old record(s) from backup"
+                    "Restored $restoredCount committee(s), ${oldEntities.size} old record(s), ${notifEntities.size} notification(s)"
                 )
             }
 
             root.optJSONObject("settings")?.let { sObj ->
+                val rawBrand = sObj.optString("companyName", "G M S R HASHMANI THAR")
                 val restoredSettings = AppCompanySettings(
-                    companyName = sObj.optString("companyName", "GM HASMANI COMMITTEE"),
-                    applicationName = sObj.optString("applicationName", "GM Hasmani Committee Manager"),
-                    adminName = sObj.optString("adminName", "GM Hasmani Admin"),
-                    adminContactNumber = sObj.optString("adminContactNumber", ""),
+                    companyName = if (rawBrand.equals("GM HASMANI COMMITTEE", true)) "G M S R HASHMANI THAR" else rawBrand,
+                    applicationName = sObj.optString("applicationName", "G M S R HASHMANI THAR"),
+                    adminName = sObj.optString("adminName", "G M S R HASHMANI THAR Admin"),
+                    adminContactNumber = sObj.optString("adminContactNumber", "03423498631"),
                     easypaisaNumber = sObj.optString("easypaisaNumber", "03423498631"),
-                    easypaisaAccountHolder = sObj.optString("easypaisaAccountHolder", "GM Hasmani Admin"),
+                    easypaisaAccountHolder = sObj.optString("easypaisaAccountHolder", "G M S R HASHMANI THAR"),
                     currency = sObj.optString("currency", "PKR"),
                     defaultMonthlyContribution = sObj.optLong("defaultMonthlyContribution", 5000L),
                     defaultTotalShares = sObj.optLong("defaultTotalShares", 10L),
                     defaultCollectionStartDay = sObj.optLong("defaultCollectionStartDay", 28L),
                     defaultCollectionEndDay = sObj.optLong("defaultCollectionEndDay", 8L),
                     defaultDurationMonths = sObj.optLong("defaultDurationMonths", 10L),
-                    pdfFooterNote = sObj.optString("pdfFooterNote", "Official GM HASMANI Committee Record")
+                    pdfFooterNote = sObj.optString("pdfFooterNote", "Official G M S R HASHMANI THAR Committee Record • 03423498631")
                 )
                 onRestoreSettings?.invoke(restoredSettings)
             }
@@ -2185,6 +2838,6 @@ class CommitteeRepository(
     companion object {
         const val DEFAULT_ADMIN_ID = "admin_default"
         const val DEFAULT_ADMIN_PIN = "1234"
-        const val KNOWN_MAIN_COMMITTEE_ID = "gm_hasmani_main_committee"
+        const val DEFAULT_MEMBER_PIN = "1234"
     }
 }

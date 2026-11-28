@@ -8,6 +8,9 @@ import com.example.model.AuditLogEntry
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.CommitteeTurn
+import com.example.model.ForwardOrganizer
+import com.example.model.ForwardPaymentRecord
+import com.example.model.InAppNotification
 import com.example.model.InstallmentRecord
 import com.example.model.LocalUser
 import com.example.model.OldCommitteeRecord
@@ -67,8 +70,13 @@ data class CommitteeEntity(
 data class MemberEntity(
     @PrimaryKey val id: String,
     val committeeId: String,
+    val memberCode: String = "",
     val name: String,
+    val fatherName: String = "",
     val phone: String,
+    val address: String = "",
+    val joiningDate: String = "",
+    val accessPin: String = "",
     val committeeNumber: Long,
     val shares: Double = 1.0,
     val payoutMonth: String,
@@ -82,8 +90,13 @@ data class MemberEntity(
     fun toModel(): CommitteeMember = CommitteeMember(
         id = id,
         committeeId = committeeId,
+        memberCode = memberCode,
         name = name,
+        fatherName = fatherName,
         phone = phone,
+        address = address,
+        joiningDate = joiningDate,
+        accessPin = accessPin,
         committeeNumber = committeeNumber,
         shares = shares,
         payoutMonth = payoutMonth,
@@ -211,6 +224,7 @@ data class InstallmentEntity(
     val paymentNote: String?,
     val paymentMethod: String = "CASH",
     val transactionId: String? = null,
+    val receiptNumber: String? = null,
     val createdAtMillis: Long,
     val updatedAtMillis: Long
 ) {
@@ -230,6 +244,7 @@ data class InstallmentEntity(
         paymentNote = paymentNote,
         paymentMethod = paymentMethod,
         transactionId = transactionId,
+        receiptNumber = receiptNumber,
         createdAtMillis = createdAtMillis,
         updatedAtMillis = updatedAtMillis
     )
@@ -260,6 +275,7 @@ data class PaymentLogEntity(
     val newStatus: String,
     val paymentMethod: String? = null,
     val transactionId: String? = null,
+    val receiptNumber: String? = null,
     val actionNote: String?,
     val createdAtMillis: Long
 ) {
@@ -276,6 +292,7 @@ data class PaymentLogEntity(
         newStatus = newStatus,
         paymentMethod = paymentMethod,
         transactionId = transactionId,
+        receiptNumber = receiptNumber,
         actionNote = actionNote,
         createdAtMillis = createdAtMillis
     )
@@ -385,6 +402,136 @@ data class UploadQueueEntity(
         status = status,
         errorMessage = errorMessage,
         attempts = attempts,
+        createdAtMillis = createdAtMillis,
+        updatedAtMillis = updatedAtMillis
+    )
+}
+
+@Entity(
+    tableName = "in_app_notifications",
+    indices = [Index("committeeId"), Index("memberId")]
+)
+data class InAppNotificationEntity(
+    @PrimaryKey val id: String,
+    val committeeId: String,
+    val memberId: String?,
+    val memberName: String?,
+    val title: String,
+    val message: String,
+    val notificationType: String,
+    val monthKey: String,
+    val isRead: Boolean,
+    val createdAtMillis: Long
+) {
+    fun toModel(): InAppNotification = InAppNotification(
+        id = id,
+        committeeId = committeeId,
+        memberId = memberId,
+        memberName = memberName,
+        title = title,
+        message = message,
+        notificationType = notificationType,
+        monthKey = monthKey,
+        isRead = isRead,
+        createdAtMillis = createdAtMillis
+    )
+}
+
+@Entity(
+    tableName = "forward_organizers",
+    foreignKeys = [
+        ForeignKey(
+            entity = CommitteeEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["committeeId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("committeeId"), Index("monthKey")]
+)
+data class ForwardOrganizerEntity(
+    @PrimaryKey val id: String,
+    val committeeId: String,
+    val organizerName: String,
+    val organizerPhone: String,
+    val totalPayableAmount: Long,
+    val monthKey: String,
+    val notes: String?,
+    val status: String,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    fun toModel(): ForwardOrganizer = ForwardOrganizer(
+        id = id,
+        committeeId = committeeId,
+        organizerName = organizerName,
+        organizerPhone = organizerPhone,
+        totalPayableAmount = totalPayableAmount,
+        monthKey = monthKey,
+        notes = notes,
+        status = status,
+        createdAtMillis = createdAtMillis,
+        updatedAtMillis = updatedAtMillis
+    )
+}
+
+@Entity(
+    tableName = "forward_payments",
+    foreignKeys = [
+        ForeignKey(
+            entity = CommitteeEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["committeeId"],
+            onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = ForwardOrganizerEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["organizerId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("committeeId"), Index("organizerId"), Index("monthKey")]
+)
+data class ForwardPaymentEntity(
+    @PrimaryKey val id: String,
+    val committeeId: String,
+    val organizerId: String,
+    val organizerName: String,
+    val organizerPhone: String,
+    val monthKey: String,
+    val amountForwarded: Long,
+    val paymentDate: String,
+    val paymentMethod: String,
+    val transactionId: String?,
+    val receiptNumber: String?,
+    val proofUri: String?,
+    val proofLabel: String?,
+    val notes: String?,
+    val confirmedByAdmin: Boolean,
+    val isReversed: Boolean,
+    val reversedReason: String?,
+    val createdAtMillis: Long,
+    val updatedAtMillis: Long
+) {
+    fun toModel(): ForwardPaymentRecord = ForwardPaymentRecord(
+        id = id,
+        committeeId = committeeId,
+        organizerId = organizerId,
+        organizerName = organizerName,
+        organizerPhone = organizerPhone,
+        monthKey = monthKey,
+        amountForwarded = amountForwarded,
+        paymentDate = paymentDate,
+        paymentMethod = paymentMethod,
+        transactionId = transactionId,
+        receiptNumber = receiptNumber,
+        proofUri = proofUri,
+        proofLabel = proofLabel,
+        notes = notes,
+        confirmedByAdmin = confirmedByAdmin,
+        isReversed = isReversed,
+        reversedReason = reversedReason,
         createdAtMillis = createdAtMillis,
         updatedAtMillis = updatedAtMillis
     )

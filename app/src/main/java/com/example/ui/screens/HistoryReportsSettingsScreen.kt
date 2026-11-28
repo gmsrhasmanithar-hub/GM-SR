@@ -21,6 +21,7 @@ import androidx.compose.material.icons.rounded.Backup
 import androidx.compose.material.icons.rounded.Business
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudQueue
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Group
 import androidx.compose.material.icons.rounded.History
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.rounded.Save
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -84,6 +86,7 @@ fun HistoryReportsSettingsScreen(
     onOpenUserManagement: () -> Unit,
     onOpenChangePassword: () -> Unit,
     onOpenAuditLog: () -> Unit,
+    onResetAllData: () -> Unit,
     onLogout: () -> Unit
 ) {
     var companyName by remember(companySettings) { mutableStateOf(companySettings.companyName) }
@@ -104,12 +107,12 @@ fun HistoryReportsSettingsScreen(
     fun persistAllSettings() {
         onSaveCompanySettings(
             companySettings.copy(
-                companyName = companyName.trim().ifEmpty { "GM HASMANI COMMITTEE" },
-                adminName = adminName.trim().ifEmpty { "GM Hasmani Admin" },
-                adminContactNumber = adminPhone.trim(),
-                pdfFooterNote = pdfFooter.trim().ifEmpty { "Official GM HASMANI Committee Record" },
+                companyName = companyName.trim().ifEmpty { "G M S R HASHMANI THAR" },
+                adminName = adminName.trim().ifEmpty { "G M S R HASHMANI THAR Admin" },
+                adminContactNumber = adminPhone.trim().ifEmpty { "03423498631" },
+                pdfFooterNote = pdfFooter.trim().ifEmpty { "Official G M S R HASHMANI THAR Record" },
                 easypaisaNumber = easypaisaNumber.trim().ifEmpty { "03423498631" },
-                easypaisaAccountHolder = easypaisaHolder.trim().ifEmpty { "GM Hasmani Admin" },
+                easypaisaAccountHolder = easypaisaHolder.trim().ifEmpty { "G M S R HASHMANI THAR" },
                 currency = currency.trim().ifEmpty { "PKR" },
                 defaultMonthlyContribution = defMonthlyContrib.toLongOrNull()?.coerceAtLeast(100L) ?: 5000L,
                 defaultTotalShares = defTotalShares.toLongOrNull()?.coerceAtLeast(1L) ?: 10L,
@@ -424,6 +427,16 @@ fun HistoryReportsSettingsScreen(
                                     Text(strings.restoreBackupJson, maxLines = 1)
                                 }
                             }
+                            OutlinedButton(
+                                onClick = onResetAllData,
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusUnpaidRed),
+                                modifier = Modifier.fillMaxWidth().testTag("reset_all_app_data_btn"),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Rounded.DeleteForever, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Clear All Data (Fresh Start)", maxLines = 1)
+                            }
                         }
                     }
 
@@ -452,7 +465,7 @@ fun HistoryReportsSettingsScreen(
                     )
 
                     Text(
-                        text = "${companySettings.companyName} • Offline Room DB v3 (Preserving All User Data)",
+                        text = "${companySettings.companyName} • Offline Room DB v6 (Clean & Ready for Real Records)",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

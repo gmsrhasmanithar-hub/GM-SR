@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Print
 import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -62,12 +63,18 @@ fun PdfReportsScreen(
     onViewPdf: (PdfReportType, CommitteeMember?) -> Unit,
     onPrintPdf: (PdfReportType, CommitteeMember?) -> Unit,
     onDownloadPdf: (PdfReportType, CommitteeMember?) -> Unit,
-    onSharePdf: (PdfReportType, CommitteeMember?) -> Unit
+    onSharePdf: (PdfReportType, CommitteeMember?) -> Unit,
+    onDownloadExcel: (PdfReportType, CommitteeMember?) -> Unit
 ) {
     var selectedMember by remember(members) { mutableStateOf(members.firstOrNull()) }
 
     val reports = remember(strings) {
         listOf(
+            PdfReportCardMeta(
+                PdfReportType.DAILY_COLLECTION,
+                strings.reportDailyCollection,
+                "Today's collected payments, receipt numbers, methods, and totals"
+            ),
             PdfReportCardMeta(
                 PdfReportType.INDIVIDUAL_MEMBER,
                 strings.reportIndividualHistory,
@@ -86,12 +93,12 @@ fun PdfReportsScreen(
             PdfReportCardMeta(
                 PdfReportType.PENDING_PAYMENTS,
                 strings.reportUnpaidMembers,
-                "Unpaid and partial installment balances for follow-up"
+                "Unpaid, partial, and overdue installment balances for follow-up"
             ),
             PdfReportCardMeta(
                 PdfReportType.COMPLETED_PAYMENTS,
                 strings.reportPaidMembers,
-                "Verified paid installments with payment dates, methods, and Tx IDs"
+                "Verified paid installments with receipt numbers, dates, methods, and Tx IDs"
             ),
             PdfReportCardMeta(
                 PdfReportType.INDIVIDUAL_COMMITTEE,
@@ -114,6 +121,11 @@ fun PdfReportsScreen(
                 strings.reportCompleteSummary,
                 "Cross-committee grand totals, collected pools, payouts, and pending balance",
                 requiresCommittee = false
+            ),
+            PdfReportCardMeta(
+                PdfReportType.FORWARD_PAYMENTS_SUMMARY,
+                strings.reportForwardPayments,
+                "Member collections, forwarded payouts, organizer balances, and Admin cash-in-hand"
             )
         )
     }
@@ -234,6 +246,17 @@ fun PdfReportsScreen(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("Share", maxLines = 1)
                         }
+                    }
+
+                    OutlinedButton(
+                        onClick = { onDownloadExcel(report.type, targetMember) },
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth().testTag("excel_btn_${report.type.name}"),
+                        shape = RoundedCornerShape(10.dp)
+                    ) {
+                        Icon(Icons.Rounded.TableChart, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(strings.downloadExcelLabel, maxLines = 1, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }

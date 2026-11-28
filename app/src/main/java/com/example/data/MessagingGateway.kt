@@ -9,8 +9,13 @@ import com.example.model.AppCompanySettings
 import com.example.model.Committee
 import com.example.model.CommitteeMember
 import com.example.model.FormatUtils
+import com.example.model.ForwardFinancialSummary
+import com.example.model.InstallmentRecord
+import com.example.model.InstallmentStatus
+import com.example.model.MemberStatus
 import com.example.model.MonthUtils
 import com.example.model.PhoneUtils
+import com.example.model.UrduMessageType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -56,6 +61,44 @@ class MessagingGateway(
             .replace("{holder}", settings.easypaisaAccountHolder)
     }
 
+    fun renderUrduMessage(
+        type: UrduMessageType,
+        memberName: String = "ممبر",
+        amount: Long = 0L,
+        date: String = MonthUtils.todayDateString(),
+        remainingAmount: Long = 0L,
+        adminMessage: String = "",
+        customTemplate: String? = null,
+        settings: AppCompanySettings = AppCompanySettings()
+    ): String {
+        val rawTemplate = customTemplate?.takeIf { it.isNotBlank() } ?: type.templateUr
+        val formattedAmount = FormatUtils.formatMoney(amount.coerceAtLeast(0L), settings.currency)
+        val formattedRemaining = FormatUtils.formatMoney(remainingAmount.coerceAtLeast(0L), settings.currency)
+        val cleanName = memberName.ifBlank { "ممبر" }
+        val cleanDate = date.ifBlank { MonthUtils.todayDateString() }
+        val cleanAdminMsg = adminMessage.ifBlank { "اہم اطلاع کے لیے رابطہ کریں" }
+
+        var rendered = rawTemplate
+            .replace("[Member Name]", cleanName)
+            .replace("[Amount]", formattedAmount)
+            .replace("[Date]", cleanDate)
+            .replace("[Remaining Amount]", formattedRemaining)
+            .replace("[Admin Message]", cleanAdminMsg)
+            .replace("{name}", cleanName)
+            .replace("{amount}", formattedAmount)
+            .replace("{date}", cleanDate)
+            .replace("{remaining}", formattedRemaining)
+
+        if (!rendered.contains("G M S R HASHMANI THAR", ignoreCase = true)) {
+            rendered = "G M S R HASHMANI THAR\n$rendered"
+        }
+        val officialContact = settings.adminContactNumber.ifBlank { "03423498631" }
+        if (!rendered.contains("03423498631") && !rendered.contains(officialContact)) {
+            rendered = "$rendered\nرابطہ: 03423498631"
+        }
+        return rendered
+    }
+
     fun buildPaymentRequestMessage(
         memberName: String,
         amount: Long,
@@ -67,14 +110,95 @@ class MessagingGateway(
         val epNumber = settings.easypaisaNumber.ifBlank { "03423498631" }
         val holder = settings.easypaisaAccountHolder.ifBlank { settings.adminName }
         val currency = settings.currency.ifBlank { "PKR" }
+        val brand = settings.companyName.ifBlank { "G M S R HASHMANI THAR" }
+        val contact = settings.adminContactNumber.ifBlank { "03423498631" }
         return buildString {
             appendLine("Assalam-o-Alaikum $memberName,")
             appendLine("Your monthly committee installment ($committeeName) of $currency $formattedAmount is due by $dueDate.")
             appendLine("Please send your payment via Easypaisa:")
             appendLine("Easypaisa Number: $epNumber")
             appendLine("Account Holder: $holder")
+            appendLine("Contact: $contact")
             appendLine("JazakAllah.")
-            append("- ${settings.companyName} Management")
+            append("- $brand Management")
+        }
+    }
+
+    /**
+     * Generates an all-Urdu financial collection & forward-payment summary for the Committee Organizer,
+     * keeping the official organization name strictly in English (`G M S R HASHMANI THAR`) and official
+     * contact (`03423498631`). Includes Paid members, Unpaid/Partial members, Total Forwarded, and Remaining Balance.
+     */
+    fun buildOrganizerUrduSummaryMessage(
+        committeeName: String,
+        organizerName: String,
+        summary: ForwardFinancialSummary,
+        members: List<CommitteeMember>,
+        scopedInstallments: List<InstallmentRecord>,
+        settings: AppCompanySettings = AppCompanySettings()
+    ): String {
+        val brand = "G M S R HASHMANI THAR"
+        val contact = settings.adminContactNumber.ifBlank { "03423498631" }
+        val currency = settings.currency.ifBlank { "PKR" }
+        val periodText = if (summary.isMonthlyScope && !summary.monthKey.isNullOrBlank()) {
+            MonthUtils.formatMonthDisplay(summary.monthKey)
+        } else {
+            "مجموعی کمیٹی حساب"
+        }
+
+        val activeMembers = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }
+            .sortedBy { it.committeeNumber }
+        val installmentByMember = scopedInstallments.groupBy { it.memberId }
+
+        val paidLines = mutableListOf<String>()
+        val unpaidLines = mutableListOf<String>()
+
+        activeMembers.forEach { member ->
+            val recs = installmentByMember[member.id].orEmpty()
+            val paidSum = recs.sumOf { it.paidAmount.coerceAtLeast(0L) }
+            val dueSum = recs.sumOf { it.dueAmount.coerceAtLeast(0L) }
+                .takeIf { it > 0L } ?: 0L
+            val remaining = (dueSum - paidSum).coerceAtLeast(0L)
+            val allPaid = recs.isNotEmpty() && recs.all { it.statusEnum == InstallmentStatus.PAID }
+
+            if (allPaid || (paidSum > 0L && remaining == 0L)) {
+                paidLines.add("• #${member.committeeNumber} ${member.name}: ${FormatUtils.formatMoney(paidSum, currency)}")
+            } else if (paidSum > 0L) {
+                paidLines.add("• #${member.committeeNumber} ${member.name} (جزوی وصول): ${FormatUtils.formatMoney(paidSum, currency)}")
+                unpaidLines.add("• #${member.committeeNumber} ${member.name} (بقایا): ${FormatUtils.formatMoney(remaining, currency)}")
+            } else {
+                val estDue = if (dueSum > 0L) FormatUtils.formatMoney(dueSum, currency) else "مکمل قسط بقایا"
+                unpaidLines.add("• #${member.committeeNumber} ${member.name}: $estDue")
+            }
+        }
+
+        return buildString {
+            appendLine(brand)
+            appendLine("السلام علیکم محترم ${organizerName.ifBlank { "آرگنائزر صاحب" }}،")
+            appendLine("کمیٹی: $committeeName ($periodText)")
+            appendLine("-------------------------")
+            appendLine("متوقع کل رقم: ${FormatUtils.formatMoney(summary.expectedFromMembers, currency)}")
+            appendLine("ممبرز سے وصول شدہ رقم: ${FormatUtils.formatMoney(summary.collectedFromMembers, currency)}")
+            appendLine("ممبرز سے بقایا رقم: ${FormatUtils.formatMoney(summary.pendingMemberCollection, currency)}")
+            appendLine("آگے ادا کی گئی رقم (فارورڈ): ${FormatUtils.formatMoney(summary.totalForwarded, currency)}")
+            appendLine("فارورڈ کی بقایا رقم: ${FormatUtils.formatMoney(summary.pendingForwardPayment, currency)}")
+            appendLine("ایڈمن کے پاس موجود رقم: ${FormatUtils.formatMoney(summary.amountCurrentlyHeldByAdmin, currency)}")
+            appendLine("-------------------------")
+            appendLine("ادائیگی کرنے والے ممبرز (${paidLines.size}):")
+            if (paidLines.isEmpty()) {
+                appendLine("• ابھی تک کوئی ادائیگی درج نہیں ہوئی")
+            } else {
+                paidLines.forEach { appendLine(it) }
+            }
+            appendLine()
+            appendLine("بقایا / غیر ادا شدہ ممبرز (${unpaidLines.size}):")
+            if (unpaidLines.isEmpty()) {
+                appendLine("• تمام ممبرز نے قسط ادا کر دی ہے")
+            } else {
+                unpaidLines.forEach { appendLine(it) }
+            }
+            appendLine("-------------------------")
+            append("رابطہ: $contact | $brand")
         }
     }
 
@@ -168,7 +292,7 @@ class MessagingGateway(
         val payload = JSONObject().apply {
             put("to", toPhone)
             put("message", messageBody)
-            put("senderId", config.smsSenderId.ifBlank { "GM HASMANI" })
+            put("senderId", config.smsSenderId.ifBlank { "G M S R HASHMANI THAR" })
         }
 
         try {

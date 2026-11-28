@@ -35,11 +35,11 @@ enum class PayoutStatus {
 }
 
 enum class InstallmentStatus {
-    PAID, UNPAID, PARTIAL;
+    PAID, UNPAID, PARTIAL, OVERDUE;
 
     companion object {
         fun fromRaw(raw: String?): InstallmentStatus =
-            entries.firstOrNull { it.name == raw } ?: UNPAID
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: UNPAID
 
         fun computeStatus(paidAmount: Long, dueAmount: Long): InstallmentStatus = when {
             paidAmount <= 0L -> UNPAID
@@ -121,6 +121,76 @@ enum class DispatchStatus {
     }
 }
 
+enum class NotificationType(val labelEn: String, val labelUr: String) {
+    PAYMENT_REMINDER("Payment Reminder", "قسط کی یاددہانی"),
+    PAYMENT_CONFIRMATION("Payment Received", "ادائیگی کی تصدیق"),
+    PENDING_REMINDER("Pending / Overdue Reminder", "بقایا رقم کی یاددہانی"),
+    WINNER_ANNOUNCEMENT("Winner Announcement", "کمیٹی ونر کا اعلان"),
+    MONTHLY_ANNOUNCEMENT("Monthly Announcement", "ماہانہ کمیٹی اعلان"),
+    GENERAL_ANNOUNCEMENT("General Announcement", "عمومی اعلان");
+
+    companion object {
+        fun fromRaw(raw: String?): NotificationType =
+            entries.firstOrNull { it.name == raw } ?: GENERAL_ANNOUNCEMENT
+    }
+}
+
+enum class UrduMessageType(
+    val code: String,
+    val titleEn: String,
+    val titleUr: String,
+    val notificationType: NotificationType,
+    val templateUr: String
+) {
+    MONTHLY_PAYMENT_REMINDER(
+        code = "A",
+        titleEn = "Monthly Payment Reminder",
+        titleUr = "ماہانہ ادائیگی کی یاددہانی",
+        notificationType = NotificationType.PAYMENT_REMINDER,
+        templateUr = "محترم ممبر، G M S R HASHMANI THAR کی ماہانہ کمیٹی کی ادائیگی کی آخری تاریخ قریب ہے۔ براہِ کرم اپنی قسط بروقت جمع کروائیں۔ رابطہ: 03423498631"
+    ),
+    PAYMENT_RECEIVED(
+        code = "B",
+        titleEn = "Payment Received Confirmation",
+        titleUr = "ادائیگی موصول ہونے کی تصدیق",
+        notificationType = NotificationType.PAYMENT_CONFIRMATION,
+        templateUr = "محترم [Member Name]، G M S R HASHMANI THAR کی طرف سے آپ کی رقم [Amount] مورخہ [Date] کو وصول ہو گئی ہے۔ بقایا رقم: [Remaining Amount]۔ شکریہ۔ رابطہ: 03423498631"
+    ),
+    PENDING_PAYMENT_REMINDER(
+        code = "C",
+        titleEn = "Pending Payment Reminder",
+        titleUr = "بقایا ادائیگی کی یاددہانی",
+        notificationType = NotificationType.PENDING_REMINDER,
+        templateUr = "محترم ممبر، G M S R HASHMANI THAR کی کمیٹی میں آپ کی بقایا رقم [Amount] واجب الادا ہے۔ براہِ کرم [Date] تک ادائیگی یقینی بنائیں۔ رابطہ: 03423498631"
+    ),
+    WINNER_ANNOUNCEMENT(
+        code = "D",
+        titleEn = "Committee Winner Announcement",
+        titleUr = "کمیٹی ونر کا اعلان",
+        notificationType = NotificationType.WINNER_ANNOUNCEMENT,
+        templateUr = "مبارک ہو! G M S R HASHMANI THAR کی اس مہینے کی کمیٹی [Member Name] کے نام نکلی ہے۔ کل رقم: [Amount]، تاریخ: [Date]۔ رابطہ: 03423498631"
+    ),
+    MONTHLY_COMMITTEE_ANNOUNCEMENT(
+        code = "E",
+        titleEn = "Monthly Committee Announcement",
+        titleUr = "ماہانہ کمیٹی کا اعلان",
+        notificationType = NotificationType.MONTHLY_ANNOUNCEMENT,
+        templateUr = "G M S R HASHMANI THAR کے تمام ممبرز کو مطلع کیا جاتا ہے کہ اس مہینے کی کمیٹی مقررہ تاریخ پر منعقد ہوگی۔ رابطہ: 03423498631"
+    ),
+    GENERAL_ANNOUNCEMENT(
+        code = "F",
+        titleEn = "General Announcement",
+        titleUr = "عمومی اعلان",
+        notificationType = NotificationType.GENERAL_ANNOUNCEMENT,
+        templateUr = "G M S R HASHMANI THAR کی طرف سے اہم اطلاع: [Admin Message]۔ رابطہ: 03423498631"
+    );
+
+    companion object {
+        fun fromRaw(raw: String?): UrduMessageType =
+            entries.firstOrNull { it.name == raw || it.code == raw } ?: MONTHLY_PAYMENT_REMINDER
+    }
+}
+
 enum class UserRole {
     ADMIN, STAFF;
 
@@ -191,19 +261,19 @@ object PasswordHasher {
 }
 
 data class AppCompanySettings(
-    val companyName: String = "GM HASMANI COMMITTEE",
-    val applicationName: String = "GM Hasmani Committee Manager",
-    val adminName: String = "GM Hasmani Admin",
-    val adminContactNumber: String = "",
+    val companyName: String = "G M S R HASHMANI THAR",
+    val applicationName: String = "G M S R HASHMANI THAR",
+    val adminName: String = "G M S R HASHMANI THAR Admin",
+    val adminContactNumber: String = "03423498631",
     val easypaisaNumber: String = "03423498631",
-    val easypaisaAccountHolder: String = "GM Hasmani Admin",
+    val easypaisaAccountHolder: String = "G M S R HASHMANI THAR",
     val currency: String = "PKR",
     val defaultMonthlyContribution: Long = 5000L,
     val defaultTotalShares: Long = 10L,
     val defaultCollectionStartDay: Long = 28L,
     val defaultCollectionEndDay: Long = 8L,
     val defaultDurationMonths: Long = 10L,
-    val pdfFooterNote: String = "Official GM HASMANI Committee Record"
+    val pdfFooterNote: String = "Official G M S R HASHMANI THAR Committee Record • 03423498631"
 )
 
 data class Committee(
@@ -233,8 +303,13 @@ data class Committee(
 data class CommitteeMember(
     val id: String = "",
     val committeeId: String = "",
+    val memberCode: String = "",
     val name: String = "",
+    val fatherName: String = "",
     val phone: String = "",
+    val address: String = "",
+    val joiningDate: String = "",
+    val accessPin: String = "",
     val committeeNumber: Long = 1L,
     val shares: Double = 1.0,
     val payoutMonth: String = MonthUtils.currentMonthKey(),
@@ -248,6 +323,8 @@ data class CommitteeMember(
     val payoutStatusEnum: PayoutStatus get() = PayoutStatus.fromRaw(payoutStatus)
     val memberStatusEnum: MemberStatus get() = MemberStatus.fromRaw(status)
     val effectiveShares: Double get() = if (shares > 0.0) shares else 1.0
+    val displayMemberId: String
+        get() = memberCode.ifBlank { "GM-${committeeNumber.toString().padStart(3, '0')}" }
 
     fun monthlyDue(shareContribution: Long): Long =
         (effectiveShares * shareContribution.toDouble()).roundToLong().coerceAtLeast(0L)
@@ -260,7 +337,7 @@ data class CommitteeTurn(
     val recipientMemberId: String? = null,
     val recipientName: String = "",
     val recipientPhone: String? = null,
-    val payoutAmount: Long = 50000L,
+    val payoutAmount: Long = 0L,
     val scheduledMonth: String = MonthUtils.currentMonthKey(),
     val payoutDate: String? = null,
     val status: String = PayoutStatus.PENDING.name,
@@ -308,12 +385,23 @@ data class InstallmentRecord(
     val paymentNote: String? = null,
     val paymentMethod: String = PaymentMethod.CASH.name,
     val transactionId: String? = null,
+    val receiptNumber: String? = null,
     val createdAtMillis: Long = System.currentTimeMillis(),
     val updatedAtMillis: Long = System.currentTimeMillis()
 ) {
     val statusEnum: InstallmentStatus get() = InstallmentStatus.fromRaw(status)
     val paymentMethodEnum: PaymentMethod get() = PaymentMethod.fromRaw(paymentMethod)
     val remainingAmount: Long get() = (dueAmount - paidAmount).coerceAtLeast(0L)
+
+    fun effectiveStatus(collectionDayStart: Long, collectionDayEnd: Long): InstallmentStatus {
+        val base = statusEnum
+        if (base == InstallmentStatus.PAID || base == InstallmentStatus.OVERDUE) return base
+        return if (paidAmount < dueAmount && MonthUtils.isCollectionWindowPast(monthKey, collectionDayStart, collectionDayEnd)) {
+            InstallmentStatus.OVERDUE
+        } else {
+            base
+        }
+    }
 }
 
 data class PaymentHistoryLog(
@@ -329,6 +417,7 @@ data class PaymentHistoryLog(
     val newStatus: String = InstallmentStatus.PAID.name,
     val paymentMethod: String? = null,
     val transactionId: String? = null,
+    val receiptNumber: String? = null,
     val actionNote: String? = null,
     val createdAtMillis: Long = System.currentTimeMillis()
 )
@@ -348,6 +437,21 @@ data class ReminderLog(
     val createdAtMillis: Long = System.currentTimeMillis()
 )
 
+data class InAppNotification(
+    val id: String = "",
+    val committeeId: String = "",
+    val memberId: String? = null,
+    val memberName: String? = null,
+    val title: String = "",
+    val message: String = "",
+    val notificationType: String = NotificationType.GENERAL_ANNOUNCEMENT.name,
+    val monthKey: String = "",
+    val isRead: Boolean = false,
+    val createdAtMillis: Long = System.currentTimeMillis()
+) {
+    val typeEnum: NotificationType get() = NotificationType.fromRaw(notificationType)
+}
+
 data class MonthlyChartPoint(
     val monthKey: String,
     val shortLabel: String,
@@ -365,11 +469,13 @@ data class DashboardSummary(
     val monthlyCollectionTarget: Long,
     val currentMonthCollected: Long,
     val currentMonthPending: Long,
+    val dailyCollectionToday: Long = 0L,
     val totalCommitteeCollectedAllMonths: Long,
     val totalCommitteeExpectedAllMonths: Long,
     val paidMembersCount: Int,
     val partialMembersCount: Int,
     val unpaidMembersCount: Int,
+    val overdueMembersCount: Int = 0,
     val currentMonthKey: String,
     val currentMonthIndex: Int,
     val totalMonths: Int,
@@ -383,6 +489,195 @@ data class DashboardSummary(
     val remainingMonths: Int,
     val monthlyChartPoints: List<MonthlyChartPoint>
 )
+
+data class ForwardOrganizer(
+    val id: String = "",
+    val committeeId: String = "",
+    val organizerName: String = "",
+    val organizerPhone: String = "",
+    val totalPayableAmount: Long = 0L,
+    val monthKey: String = MonthUtils.currentMonthKey(),
+    val notes: String? = null,
+    val status: String = CommitteeStatus.ACTIVE.name,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+data class ForwardPaymentRecord(
+    val id: String = "",
+    val committeeId: String = "",
+    val organizerId: String = "",
+    val organizerName: String = "",
+    val organizerPhone: String = "",
+    val monthKey: String = MonthUtils.currentMonthKey(),
+    val amountForwarded: Long = 0L,
+    val paymentDate: String = MonthUtils.todayDateString(),
+    val paymentMethod: String = PaymentMethod.CASH.name,
+    val transactionId: String? = null,
+    val receiptNumber: String? = null,
+    val proofUri: String? = null,
+    val proofLabel: String? = null,
+    val notes: String? = null,
+    val confirmedByAdmin: Boolean = false,
+    val isReversed: Boolean = false,
+    val reversedReason: String? = null,
+    val createdAtMillis: Long = System.currentTimeMillis(),
+    val updatedAtMillis: Long = System.currentTimeMillis()
+) {
+    val paymentMethodEnum: PaymentMethod get() = PaymentMethod.fromRaw(paymentMethod)
+    val isEffective: Boolean get() = confirmedByAdmin && !isReversed && amountForwarded > 0L
+}
+
+data class OrganizerForwardBreakdown(
+    val organizer: ForwardOrganizer,
+    val forwardedAmount: Long,
+    val remainingAmount: Long,
+    val paymentCount: Int,
+    val lastPaymentDate: String?
+)
+
+data class ForwardFinancialSummary(
+    val scopeLabel: String,
+    val isMonthlyScope: Boolean,
+    val monthKey: String?,
+    val expectedFromMembers: Long,
+    val collectedFromMembers: Long,
+    val pendingMemberCollection: Long,
+    val forwardPaymentDue: Long,
+    val totalForwarded: Long,
+    val pendingForwardPayment: Long,
+    val amountCurrentlyHeldByAdmin: Long,
+    val paidMemberCount: Int,
+    val partialMemberCount: Int,
+    val unpaidMemberCount: Int,
+    val organizerBreakdowns: List<OrganizerForwardBreakdown>
+)
+
+object ForwardFinancialCalculator {
+    /**
+     * Computes clean, non-double-counted financial reconciliation from separate ledgers:
+     * - Member collection ledger (`installments`)
+     * - Forward payable agreements (`organizers`)
+     * - Explicit admin-confirmed forward transfers (`forwardPayments`)
+     * Never treats member collections as auto-forwarded.
+     */
+    fun compute(
+        committee: Committee?,
+        members: List<CommitteeMember>,
+        installments: List<InstallmentRecord>,
+        organizers: List<ForwardOrganizer>,
+        forwardPayments: List<ForwardPaymentRecord>,
+        monthKey: String? = null
+    ): ForwardFinancialSummary {
+        val activeMembers = members.filter { it.memberStatusEnum == MemberStatus.ACTIVE }
+        val scopedInstallments = if (monthKey != null) {
+            installments.filter { it.monthKey == monthKey }
+        } else {
+            installments
+        }
+        val scopedOrganizers = if (monthKey != null) {
+            organizers.filter { it.monthKey == monthKey || it.monthKey.isBlank() }
+        } else {
+            organizers
+        }
+        val scopedPayments = if (monthKey != null) {
+            forwardPayments.filter { it.monthKey == monthKey }
+        } else {
+            forwardPayments
+        }
+
+        val collectedFromMembers = scopedInstallments.sumOf { it.paidAmount.coerceAtLeast(0L) }
+        val expectedFromMembers = if (scopedInstallments.isNotEmpty()) {
+            scopedInstallments.sumOf { maxOf(it.dueAmount, it.paidAmount).coerceAtLeast(0L) }
+        } else if (committee != null) {
+            if (monthKey != null) {
+                val activeShareSum = activeMembers.sumOf { it.monthlyDue(committee.monthlyInstallment) }
+                if (activeShareSum > 0L) activeShareSum else committee.monthlyCollectionTotal
+            } else {
+                committee.totalCommitteeAmount
+            }
+        } else {
+            0L
+        }
+        val pendingMemberCollection = (expectedFromMembers - collectedFromMembers).coerceAtLeast(0L)
+
+        // Effective forward transfers must be explicitly confirmed by Admin and not reversed
+        val effectivePayments = scopedPayments.filter { it.isEffective }
+        val totalForwarded = effectivePayments.sumOf { it.amountForwarded }
+
+        // Forward Payment Due comes from Admin-configured organizer payables (never auto-inferred)
+        val forwardPaymentDue = scopedOrganizers.sumOf { it.totalPayableAmount.coerceAtLeast(0L) }
+        val pendingForwardPayment = (forwardPaymentDue - totalForwarded).coerceAtLeast(0L)
+
+        // Cash currently held by Admin = Collected from Members - Confirmed Forwarded
+        val amountCurrentlyHeldByAdmin = collectedFromMembers - totalForwarded
+
+        val effectivePaymentsAllForOrg = if (monthKey != null) {
+            forwardPayments.filter { it.isEffective && it.monthKey == monthKey }
+        } else {
+            forwardPayments.filter { it.isEffective }
+        }
+
+        val breakdowns = scopedOrganizers.map { org ->
+            val orgPayments = effectivePaymentsAllForOrg.filter { it.organizerId == org.id }
+            val orgForwarded = orgPayments.sumOf { it.amountForwarded }
+            OrganizerForwardBreakdown(
+                organizer = org,
+                forwardedAmount = orgForwarded,
+                remainingAmount = (org.totalPayableAmount - orgForwarded).coerceAtLeast(0L),
+                paymentCount = orgPayments.size,
+                lastPaymentDate = orgPayments.maxByOrNull { it.paymentDate }?.paymentDate
+            )
+        }
+
+        var paidCount = 0
+        var partialCount = 0
+        var unpaidCount = 0
+        if (monthKey != null) {
+            val byMember = scopedInstallments.associateBy { it.memberId }
+            activeMembers.forEach { member ->
+                val rec = byMember[member.id]
+                val status = rec?.statusEnum ?: InstallmentStatus.UNPAID
+                when {
+                    status == InstallmentStatus.PAID -> paidCount++
+                    (rec?.paidAmount ?: 0L) > 0L || status == InstallmentStatus.PARTIAL -> partialCount++
+                    else -> unpaidCount++
+                }
+            }
+        } else {
+            scopedInstallments.forEach { rec ->
+                when {
+                    rec.statusEnum == InstallmentStatus.PAID -> paidCount++
+                    rec.paidAmount > 0L || rec.statusEnum == InstallmentStatus.PARTIAL -> partialCount++
+                    else -> unpaidCount++
+                }
+            }
+        }
+
+        val scopeLabel = if (monthKey != null) {
+            MonthUtils.formatMonthDisplay(monthKey)
+        } else {
+            "Overall Committee"
+        }
+
+        return ForwardFinancialSummary(
+            scopeLabel = scopeLabel,
+            isMonthlyScope = monthKey != null,
+            monthKey = monthKey,
+            expectedFromMembers = expectedFromMembers,
+            collectedFromMembers = collectedFromMembers,
+            pendingMemberCollection = pendingMemberCollection,
+            forwardPaymentDue = forwardPaymentDue,
+            totalForwarded = totalForwarded,
+            pendingForwardPayment = pendingForwardPayment,
+            amountCurrentlyHeldByAdmin = amountCurrentlyHeldByAdmin,
+            paidMemberCount = paidCount,
+            partialMemberCount = partialCount,
+            unpaidMemberCount = unpaidCount,
+            organizerBreakdowns = breakdowns
+        )
+    }
+}
 
 object MonthUtils {
     private val keyFormat = SimpleDateFormat("yyyy-MM", Locale.US)
@@ -454,6 +749,31 @@ object MonthUtils {
     fun formatPayoutDate(monthKey: String, payoutDay: Long, startDay: Long): String {
         val targetMonth = if (payoutDay < startDay) addMonths(monthKey, 1) else monthKey
         return "$payoutDay ${formatMonthDisplay(targetMonth)}"
+    }
+
+    fun dueDateString(monthKey: String, startDay: Long, endDay: Long): String {
+        val targetMonth = if (endDay < startDay) addMonths(monthKey, 1) else monthKey
+        val parts = targetMonth.split("-")
+        if (parts.size != 2) return todayDateString()
+        val year = parts[0].toIntOrNull() ?: return todayDateString()
+        val month = (parts[1].toIntOrNull() ?: 1) - 1
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.YEAR, year)
+        cal.set(Calendar.MONTH, month)
+        val maxDay = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+        cal.set(Calendar.DAY_OF_MONTH, endDay.toInt().coerceIn(1, maxDay))
+        return dateFormat.format(cal.time)
+    }
+
+    fun isCollectionWindowPast(
+        monthKey: String,
+        startDay: Long,
+        endDay: Long,
+        referenceDate: String = todayDateString()
+    ): Boolean {
+        if (!isValidMonthKey(monthKey)) return false
+        val due = dueDateString(monthKey, startDay, endDay)
+        return referenceDate > due
     }
 }
 
@@ -663,6 +983,9 @@ data class BackupPreview(
     val installmentCount: Int,
     val turnCount: Int = 0,
     val oldRecordCount: Int = 0,
+    val notificationCount: Int = 0,
+    val forwardOrganizerCount: Int = 0,
+    val forwardPaymentCount: Int = 0,
     val exportedAt: String
 )
 
@@ -674,13 +997,18 @@ object BackupUtils {
             var members = 0
             var installments = 0
             var turns = 0
+            var forwardOrgs = 0
+            var forwardPays = 0
             for (i in 0 until committees.length()) {
                 val c = committees.getJSONObject(i)
                 members += c.optJSONArray("members")?.length() ?: 0
                 installments += c.optJSONArray("installments")?.length() ?: 0
                 turns += c.optJSONArray("turns")?.length() ?: 0
+                forwardOrgs += c.optJSONArray("forwardOrganizers")?.length() ?: 0
+                forwardPays += c.optJSONArray("forwardPayments")?.length() ?: 0
             }
             val oldCount = root.optJSONArray("oldCommitteeRecords")?.length() ?: 0
+            val notifCount = root.optJSONArray("inAppNotifications")?.length() ?: 0
             Result.success(
                 BackupPreview(
                     committeeCount = committees.length(),
@@ -688,6 +1016,9 @@ object BackupUtils {
                     installmentCount = installments,
                     turnCount = turns,
                     oldRecordCount = oldCount,
+                    notificationCount = notifCount,
+                    forwardOrganizerCount = forwardOrgs,
+                    forwardPaymentCount = forwardPays,
                     exportedAt = root.optString("exportedAt", "")
                 )
             )
